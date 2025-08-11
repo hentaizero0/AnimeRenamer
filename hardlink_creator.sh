@@ -44,6 +44,105 @@ anime_name=$(basename "$DIRECTORY")
 print_info "正在处理目录: $DIRECTORY"
 print_info "动画名: 《$anime_name》"
 
+# 验证TMDB目录结构
+print_info "验证TMDB目录结构..."
+
+# 检查第一层目录是否都是Season X格式
+invalid_dirs=()
+season_numbers=()
+for item in "$ANIME_ROOT_DIR"/*; do
+    if [ -d "$item" ]; then
+        dirname=$(basename "$item")
+        if [[ ! "$dirname" =~ ^Season[[:space:]][1-9][0-9]*$ ]]; then
+            invalid_dirs+=("$dirname")
+        else
+            # 提取季号
+            season_num=$(echo "$dirname" | grep -o '[0-9]\+')
+            season_numbers+=("$season_num")
+        fi
+    fi
+done
+
+# 如果存在非Season X格式的目录，报错退出
+if [ ${#invalid_dirs[@]} -gt 0 ]; then
+    print_error "发现非TMDB格式的目录:"
+    for dir in "${invalid_dirs[@]}"; do
+        print_error "- $dir"
+    done
+    exit 1
+fi
+
+# 验证每个Season目录中的文件命名格式
+for season_num in "${season_numbers[@]}"; do
+    season_dir="$ANIME_ROOT_DIR/Season $season_num"
+    season_pattern="S$(printf "%02d" "$season_num")E"
+    
+    # 查找视频文件
+    video_found=false
+    for file in "$season_dir"/*; do
+        if [[ -f "$file" && "$file" =~ \.(mkv|mp4|avi|m2ts|ts)$ ]]; then
+            if [[ ! "$(basename "$file")" =~ $season_pattern ]]; then
+                print_error "Season $season_num 中的视频文件命名格式错误:"
+                print_error "- $(basename "$file")"
+                print_error "应该包含: $season_pattern"
+                exit 1
+            fi
+            video_found=true
+        fi
+    done
+    
+    if [ "$video_found" = false ]; then
+        print_error "Season $season_num 中未找到视频文件"
+        exit 1
+    fi
+done
+
+print_success "目录结构验证通过"
+
+# 询问是否需要转移目录
+echo ""
+read -p "是否需要转移目录到其他位置? (y/n): " need_move
+
+if [[ "$need_move" == "y" || "$need_move" == "Y" ]]; then
+    echo ""
+    print_info "选择目标目录:"
+    echo "1. 使用默认路径: /mnt/user/hentaidisk/video/anime"
+    echo "2. 输入自定义路径"
+    
+    read -p "请选择 (1/2): " move_choice
+    
+    if [[ "$move_choice" == "1" ]]; then
+        MOVE_TARGET="/mnt/user/hentaidisk/video/anime"
+    else
+        read -p "请输入目标目录路径: " MOVE_TARGET
+    fi
+    
+    # 创建目标目录
+    if [ ! -d "$MOVE_TARGET" ]; then
+        mkdir -p "$MOVE_TARGET"
+    fi
+    
+    # 转移目录
+    move_target_dir="$MOVE_TARGET/$anime_name"
+    print_info "开始转移到: $move_target_dir"
+    
+    if mv "$ANIME_ROOT_DIR" "$move_target_dir"; then
+        print_success "目录转移成功"
+        ANIME_ROOT_DIR="$move_target_dir"
+    else
+        print_error "目录转移失败"
+        exit 1
+    fi
+fi
+
+# 询问是否创建硬链接
+echo ""
+read -p "是否需要创建硬链接? (y/n): " need_link
+
+if [[ "$need_link" != "y" && "$need_link" != "Y" ]]; then
+    print_info "操作完成"
+    exit 0
+fi
 
 # 如果没有提供目标目录，询问用户
 if [ -z "$TARGET_DIR" ]; then
