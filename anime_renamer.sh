@@ -56,7 +56,22 @@ calculate_max_length() {
 
 # 检查参数
 if [ $# -ne 1 ]; then
-    echo "用法: ./anime_renamer.sh \"目录名\""
+    echo "用法: ./anime_renamer.sh \"目录路径\""
+    echo ""
+    echo "注意: 如果路径包含空格或特殊字符，请使用双引号包围"
+    echo ""
+    echo "示例:"
+    echo "  ./anime_renamer.sh \"./动画目录\""
+    echo "  ./anime_renamer.sh \"/full/path/to/anime directory\""
+    echo "  ./anime_renamer.sh \"/path/with [brackets] & special chars\""
+    echo ""
+    if [ $# -gt 1 ]; then
+        echo "检测到多个参数，可能是路径未用引号包围"
+        echo "当前接收到的参数："
+        for i in $(seq 1 $#); do
+            echo "  参数$i: ${!i}"
+        done
+    fi
     exit 1
 fi
 
@@ -264,53 +279,122 @@ if [ "$skip_rename" = false ]; then
     season_str=$(printf "S%02d" "$season")
     print_info "季数格式: $season_str"
 
-    # 生成重命名预览
+    # 生成重命名预览 - 使用视频文件作为基准创建映射
     echo ""
     echo "==================== 重命名预览 ===================="
-    rename_list=()
-
-    # 计算对齐长度
-    max_length=$(calculate_max_length)
-    padding=$((max_length + 5))
-
+    
+    # 第1步：扫描所有视频文件创建基础映射
+    video_files=()
+    rename_map=()  # 存储 "原始基础名|新基础名" 的映射关系
+    
+    print_info "第1步：扫描视频文件创建基础映射..."
+    
     for file in "${anime_files[@]}"; do
-        # 提取当前文件的集数
-        temp_file2=$(mktemp)
-        echo "$file" | grep -o '\[[^]]*\]' | sed 's/\[//g' | sed 's/\]//g' > "$temp_file2"
+        filename=$(basename "$file")
         
-        current_brackets=()
-        while IFS= read -r line; do
-            current_brackets+=("$line")
-        done < "$temp_file2"
-        rm "$temp_file2"
-        
-        current_episode=""
-        
-        for bracket in "${current_brackets[@]}"; do
-            if [[ "$bracket" =~ ^[0-9]{2}$ ]] && [ "$bracket" -ge 1 ] && [ "$bracket" -le 99 ]; then
-                current_episode="$bracket"
-                break
+        # 只处理视频文件
+        if [[ "$filename" =~ \.(mkv|mp4|avi|m2ts|ts)$ ]]; then
+            # 提取当前文件的集数
+            temp_file2=$(mktemp)
+            echo "$filename" | grep -o '\[[^]]*\]' | sed 's/\[//g' | sed 's/\]//g' > "$temp_file2"
+            
+            current_brackets=()
+            while IFS= read -r line; do
+                current_brackets+=("$line")
+            done < "$temp_file2"
+            rm "$temp_file2"
+            
+            current_episode=""
+            
+            for bracket in "${current_brackets[@]}"; do
+                if [[ "$bracket" =~ ^[0-9]{2}$ ]] && [ "$bracket" -ge 1 ] && [ "$bracket" -le 99 ]; then
+                    current_episode="$bracket"
+                    break
+                fi
+            done
+            
+            if [ -n "$current_episode" ]; then
+                # 获取去掉最后扩展名的基础文件名
+                base_name="${filename%.*}"
+                new_base_name="${anime_name} ${season_str}E${current_episode}"
+                
+                rename_map+=("$base_name|$new_base_name")
+                video_files+=("$filename")
+                
+                print_info "  映射: $base_name → $new_base_name"
+            fi
+        fi
+    done
+    
+    if [ ${#rename_map[@]} -eq 0 ]; then
+        print_error "未找到任何视频文件来创建基础映射"
+        exit 1
+    fi
+    
+    # 第2步：基于映射查找所有相关文件并生成重命名预览
+    echo ""
+    print_info "第2步：查找所有相关文件并生成重命名预览..."
+    
+    all_files_in_dir=()
+    for file in "$DIRECTORY"/*; do
+        if [ -f "$file" ]; then
+            all_files_in_dir+=("$(basename "$file")")
+        fi
+    done
+    
+    final_rename_list=()
+    
+    # 计算对齐长度
+    max_length=0
+    
+    for mapping in "${rename_map[@]}"; do
+        old_base="${mapping%|*}"
+        new_base="${mapping#*|}"
+
+        # 查找所有以这个基础名开头的文件
+        for file in "${all_files_in_dir[@]}"; do
+            # 检查文件是否完全匹配old_base或以old_base开头后跟点号
+            if [[ "$file" == "$old_base" || "$file" == "$old_base."* ]]; then
+                # 如果文件名长于old_base，说明有后缀
+                if [[ ${#file} -gt ${#old_base} ]]; then
+                    # 直接截取old_base之后的部分作为后缀
+                    suffix="${file:${#old_base}}"
+                    new_filename="${new_base}${suffix}"
+                else
+                    # 文件名就是基础名，没有后缀
+                    new_filename="$new_base"
+                fi
+
+                # 计算显示长度
+                if [ ${#file} -gt $max_length ]; then
+                    max_length=${#file}
+                fi
+
+                final_rename_list+=("$file|$new_filename")
             fi
         done
+    done
+    
+    # 显示重命名预览
+    padding=$((max_length + 5))
+    
+    for item in "${final_rename_list[@]}"; do
+        old_name="${item%|*}"
+        new_name="${item#*|}"
         
-        if [ -n "$current_episode" ]; then
-            # 获取文件扩展名
-            extension="${file##*.}"
-            new_filename="${anime_name} ${season_str}E${current_episode}.${extension}"
-            
-            # 生成带颜色高亮的原文件名
-            episode_color=$(get_episode_color "$current_episode")
+        # 提取集数用于颜色显示
+        episode_num=""
+        if [[ "$new_name" =~ S[0-9]{2}E([0-9]{2}) ]]; then
+            episode_num="${BASH_REMATCH[1]}"
+        fi
+        
+        if [ -n "$episode_num" ]; then
+            episode_color=$(get_episode_color "$episode_num")
             reset=$(reset_color)
-            colored_original_file=$(echo "$file" | sed "s/\[$current_episode\]/${episode_color}[$current_episode]${reset}/g")
-            
-            # 生成带颜色高亮的新文件名用于显示
-            colored_new_filename="${anime_name} ${season_str}E${episode_color}${current_episode}${reset}.${extension}"
-            
-            # 使用printf进行对齐
-            printf "%-*s ==> %s\n" "$padding" "$colored_original_file" "$colored_new_filename"
-            rename_list+=("$file|$new_filename")
+            colored_new_name=$(echo "$new_name" | sed "s/E${episode_num}/E${episode_color}${episode_num}${reset}/g")
+            printf "%-*s ==> %s\n" "$padding" "$old_name" "$colored_new_name"
         else
-            printf "%-*s ==> 跳过 (无法识别集数)\n" "$padding" "$file"
+            printf "%-*s ==> %s\n" "$padding" "$old_name" "$new_name"
         fi
     done
 
@@ -329,7 +413,7 @@ if [ "$skip_rename" = false ]; then
     print_info "开始重命名文件..."
     success_count=0
 
-    for item in "${rename_list[@]}"; do
+    for item in "${final_rename_list[@]}"; do
         old_name="${item%|*}"
         new_name="${item#*|}"
         
@@ -346,7 +430,8 @@ if [ "$skip_rename" = false ]; then
 
     echo ""
     print_success "重命名完成！成功处理了 $success_count 个文件"
-fi
+    echo "====================================================="
+fi  # 这个fi结束了if [ "$skip_rename" = false ]的条件块
 
 # 询问是否转移到其他目录
 echo ""
@@ -416,18 +501,20 @@ if [[ "$move_files" == "y" || "$move_files" == "Y" ]]; then
     echo ""
     print_info "开始转移文件到TMDB结构: $season_target_dir"
     
+    # 转移所有内容到季目录
     moved_count=0
-    for file in "$DIRECTORY"/*; do
-        if [ -f "$file" ]; then
-            filename=$(basename "$file")
-            target_file="$season_target_dir/$filename"
-            
-            if mv "$file" "$target_file" 2>/dev/null; then
-                print_success "转移: $filename"
-                ((moved_count++))
-            else
-                print_error "转移失败: $filename"
-            fi
+    for item in "$DIRECTORY"/*; do
+        # 跳过 . 和 .. 目录
+        [ -e "$item" ] || continue
+
+        filename=$(basename "$item")
+        target_path="$season_target_dir/$filename"
+
+        if mv "$item" "$target_path" 2>/dev/null; then
+            print_success "转移: $filename"
+            ((moved_count++))
+        else
+            print_error "转移失败: $filename"
         fi
     done
     
@@ -438,6 +525,7 @@ if [[ "$move_files" == "y" || "$move_files" == "Y" ]]; then
             print_success "删除空的原目录: $DIRECTORY"
         fi
     fi
+    echo "======================================================="
     
     print_success "文件转移完成！成功转移了 $moved_count 个文件"
     print_info "TMDB结构路径: $season_target_dir"
@@ -507,7 +595,7 @@ if [[ "$create_hardlink" == "y" || "$create_hardlink" == "Y" ]]; then
     
     # 可能的脚本位置
     possible_locations=(
-        "$script_dir/hardlink_creator.sh"           # 与anime_renamer.sh同一目录
+        "$script_dir/hardlink_creator.sh"          # 与anime_renamer.sh同一目录
         "$current_dir/hardlink_creator.sh"         # 当前工作目录
         "./hardlink_creator.sh"                    # 相对路径
         "$(dirname "$0")/hardlink_creator.sh"      # 脚本所在目录
@@ -544,3 +632,5 @@ else
 fi
 
 print_success "动画重命名脚本执行完成！"
+exit 0
+# 结束脚本
