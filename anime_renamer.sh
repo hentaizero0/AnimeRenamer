@@ -68,17 +68,26 @@ if [ ! -d "$DIRECTORY" ]; then
     exit 1
 fi
 
+# 获取绝对路径和目录名
+DIRECTORY="$(realpath "$DIRECTORY")"
+original_dir_name="$(basename "$DIRECTORY")"
+
 print_info "正在处理目录: $DIRECTORY"
+print_info "目录名: $original_dir_name"
 
 # 询问是否重命名根目录
 read -p "是否需要重命名根目录? (y/n): " rename_root
 if [[ "$rename_root" == "y" || "$rename_root" == "Y" ]]; then
     read -p "请输入新的目录名: " new_root_name
-    if [ -n "$new_root_name" ] && [ "$new_root_name" != "$DIRECTORY" ]; then
-        mv "$DIRECTORY" "$new_root_name" 2>/dev/null
+    if [ -n "$new_root_name" ] && [ "$new_root_name" != "$original_dir_name" ]; then
+        parent_dir="$(dirname "$DIRECTORY")"
+        new_directory="$parent_dir/$new_root_name"
+        
+        mv "$DIRECTORY" "$new_directory" 2>/dev/null
         if [ $? -eq 0 ]; then
-            print_success "根目录已重命名: $DIRECTORY -> $new_root_name"
-            DIRECTORY="$new_root_name"
+            print_success "根目录已重命名: $original_dir_name -> $new_root_name"
+            DIRECTORY="$new_directory"
+            original_dir_name="$new_root_name"
         else
             print_error "重命名根目录失败"
         fi
@@ -120,7 +129,7 @@ if [ ${#anime_files[@]} -eq 0 ]; then
     fi
     
     # 设置一些默认值用于后续操作
-    anime_name=$(basename "$DIRECTORY")
+    anime_name="$original_dir_name"
     
     # 即使没有重命名，也要询问季数
     while true; do
@@ -200,15 +209,43 @@ if [ "$skip_rename" = false ]; then
             ((info_display_idx++))
         fi
     done
+    
+    # 添加额外选项
+    echo "$info_display_idx. 使用目录名作为动画名称: $original_dir_name"
+    use_dirname_idx=$info_display_idx
+    ((info_display_idx++))
+    echo "$info_display_idx. 自定义动画名称"
+    custom_idx=$info_display_idx
 
     # 询问哪个是动画名称
     while true; do
-        read -p "请选择哪个是动画名称 (1-${#info_list[@]}): " choice
-        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#info_list[@]} ]; then
-            anime_name="${info_list[$((choice-1))]}"
-            break
+        read -p "请选择哪个是动画名称 (1-$info_display_idx): " choice
+        if [[ "$choice" =~ ^[0-9]+$ ]]; then
+            if [ "$choice" -ge 1 ] && [ "$choice" -le ${#info_list[@]} ]; then
+                # 用户选择了解析出的信息
+                anime_name="${info_list[$((choice-1))]}"
+                break
+            elif [ "$choice" -eq $use_dirname_idx ]; then
+                # 用户选择了使用目录名作为动画名称
+                anime_name="$original_dir_name"
+                break
+            elif [ "$choice" -eq $custom_idx ]; then
+                # 用户选择了自定义选项
+                while true; do
+                    read -p "请输入自定义动画名称: " custom_name
+                    if [ -n "$custom_name" ]; then
+                        anime_name="$custom_name"
+                        break
+                    else
+                        print_error "动画名称不能为空，请重新输入"
+                    fi
+                done
+                break
+            else
+                print_error "请输入 1 到 $info_display_idx 之间的数字"
+            fi
         else
-            print_error "请输入 1 到 ${#info_list[@]} 之间的数字"
+            print_error "请输入有效的数字"
         fi
     done
 
@@ -464,22 +501,46 @@ fi
 echo ""
 read -p "是否创建硬链接? (y/n): " create_hardlink
 if [[ "$create_hardlink" == "y" || "$create_hardlink" == "Y" ]]; then
-    # 检查hardlink_creator.sh是否存在
+    # 检查hardlink_creator.sh的多个可能位置
     script_dir=$(dirname "$0")
-    hardlink_script="$script_dir/hardlink_creator.sh"
+    current_dir=$(pwd)
     
-    if [ -f "$hardlink_script" ]; then
+    # 可能的脚本位置
+    possible_locations=(
+        "$script_dir/hardlink_creator.sh"           # 与anime_renamer.sh同一目录
+        "$current_dir/hardlink_creator.sh"         # 当前工作目录
+        "./hardlink_creator.sh"                    # 相对路径
+        "$(dirname "$0")/hardlink_creator.sh"      # 脚本所在目录
+    )
+    
+    hardlink_script=""
+    
+    # 查找hardlink_creator.sh
+    for location in "${possible_locations[@]}"; do
+        if [ -f "$location" ]; then
+            hardlink_script="$location"
+            break
+        fi
+    done
+    
+    if [ -n "$hardlink_script" ]; then
+        print_info "找到硬链接脚本: $hardlink_script"
         print_info "调用硬链接创建脚本..."
-        echo "执行命令: $hardlink_script \"$FINAL_ANIME_DIR\""
+        echo "执行命令: \"$hardlink_script\" \"$FINAL_ANIME_DIR\""
         
         # 调用硬链接脚本
         bash "$hardlink_script" "$FINAL_ANIME_DIR"
     else
-        print_error "hardlink_creator.sh 不存在于脚本目录: $script_dir"
-        print_info "请确保 hardlink_creator.sh 与此脚本在同一目录中"
+        print_error "未找到 hardlink_creator.sh"
+        print_info "已检查以下位置:"
+        for location in "${possible_locations[@]}"; do
+            echo "  - $location"
+        done
+        print_info "请手动运行: hardlink_creator.sh \"$FINAL_ANIME_DIR\""
     fi
 else
     print_info "跳过硬链接创建"
+    print_info "如需后续创建硬链接，请运行: hardlink_creator.sh \"$FINAL_ANIME_DIR\""
 fi
 
 print_success "动画重命名脚本执行完成！"
