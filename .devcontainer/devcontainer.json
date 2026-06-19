@@ -1,0 +1,20 @@
+// .devcontainer/devcontainer.json
+{
+  "name": "Anime Triage Development Environment",
+  
+  // 使用官方的 Python 3.12 镜像，Python 非常适合处理文件操作、正则匹配和对接 API
+  "image": "mcr.microsoft.com/devcontainers/python:3-3.12",
+
+  // 常用 VS Code 扩展配置
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance"
+      ]
+    }
+  },
+
+  // 以 root 身份运行容器，避免由于文件属主或权限问题导致无法读取/写入挂载的 NAS 目录
+  "remoteUser": "root"
+}

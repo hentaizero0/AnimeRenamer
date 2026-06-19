@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="AnimeRenamer v2 — Intelligent anime file renaming dashboard with confidence scoring and queue management." />
+  <title>AnimeRenamer v2 — Dashboard</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <!-- Preconnect for Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+</head>
+<body>
+
+  <!-- ── Sidebar ─────────────────────────────────────────────────────────── -->
+  <aside class="sidebar" role="navigation" aria-label="Main navigation">
+    <div class="sidebar-logo">
+      <div class="logo-icon" aria-hidden="true">🎌</div>
+      <div class="logo-text">
+        <span class="logo-title">AnimeRenamer</span>
+        <span class="logo-sub">v2.0 Dashboard</span>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-item active" data-view="dashboard" id="nav-dashboard" role="button" tabindex="0" aria-label="Dashboard view">
+        <span class="nav-icon" aria-hidden="true">🏠</span>
+        <span>首页</span>
+        <span class="nav-badge" id="nav-pending-badge">3</span>
+      </div>
+      <div class="nav-item" data-view="series" id="nav-series" role="button" tabindex="0" aria-label="Series library">
+        <span class="nav-icon" aria-hidden="true">📚</span>
+        <span>番剧库</span>
+      </div>
+      <div class="nav-item" data-view="logs" id="nav-logs" role="button" tabindex="0" aria-label="Operation logs">
+        <span class="nav-icon" aria-hidden="true">📋</span>
+        <span>日志</span>
+      </div>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="api-status">
+        <div class="api-status-dot" id="api-status-dot"></div>
+        <span id="api-status-label">检查中…</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Main ────────────────────────────────────────────────────────────── -->
+  <main class="main" role="main">
+
+    <!-- Topbar -->
+    <header class="topbar">
+      <h1 class="topbar-title" id="topbar-title">仪表盘</h1>
+      <div class="topbar-actions">
+        <button class="btn btn-ghost btn-icon" id="btn-refresh" title="刷新数据" aria-label="Refresh data">
+          ↺
+        </button>
+        <button class="btn btn-accent btn-sm" id="btn-add-series" title="添加番剧" aria-label="Add new series">
+          ＋ 添加番剧
+        </button>
+      </div>
+    </header>
+
+    <!-- Scrollable content area -->
+    <div class="content" id="main-content">
+
+      <!-- ════════════════ Dashboard View ════════════════ -->
+      <section class="view active" id="view-dashboard" aria-labelledby="topbar-title">
+
+        <!-- Stats bar -->
+        <div class="stats-bar" role="region" aria-label="Statistics">
+          <div class="stat-card pending">
+            <div class="stat-icon" aria-hidden="true">⏳</div>
+            <div>
+              <div class="stat-value" id="stat-pending">—</div>
+              <div class="stat-label">待处理</div>
+            </div>
+          </div>
+          <div class="stat-card processed">
+            <div class="stat-icon" aria-hidden="true">✅</div>
+            <div>
+              <div class="stat-value" id="stat-processed">—</div>
+              <div class="stat-label">今日已处理</div>
+            </div>
+          </div>
+          <div class="stat-card errors">
+            <div class="stat-icon" aria-hidden="true">⚠️</div>
+            <div>
+              <div class="stat-value" id="stat-errors">—</div>
+              <div class="stat-label">错误</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pending queue -->
+        <div class="section-header">
+          <h2 class="section-title">待处理队列</h2>
+        </div>
+        <div class="pending-cards-grid" id="pending-cards" role="list" aria-label="Pending rename queue">
+          <!-- JS renders cards here -->
+          <div class="empty-state">
+            <div class="empty-icon">⏳</div>
+            <p>加载中…</p>
+          </div>
+        </div>
+
+        <!-- Recent activity -->
+        <div class="section-header" style="margin-top:32px;">
+          <h2 class="section-title">最近活动</h2>
+        </div>
+        <div class="activity-list" id="recent-list" role="log" aria-label="Recent activity">
+          <!-- JS renders here -->
+        </div>
+
+      </section>
+
+      <!-- ════════════════ Series View ════════════════ -->
+      <section class="view" id="view-series" aria-label="Series library">
+
+        <div class="section-header">
+          <h2 class="section-title">番剧库</h2>
+          <span style="font-size:12px;color:var(--text-muted)">已配置 <strong id="series-count" style="color:var(--text-primary)">—</strong> 部</span>
+        </div>
+
+        <div class="series-grid" id="series-grid" role="list" aria-label="Configured series">
+          <!-- JS renders here -->
+        </div>
+
+      </section>
+
+      <!-- ════════════════ Logs View ════════════════ -->
+      <section class="view" id="view-logs" aria-label="Operation logs">
+
+        <div class="section-header">
+          <h2 class="section-title">操作日志</h2>
+        </div>
+
+        <!-- Filter bar -->
+        <div class="log-filter-bar" role="group" aria-label="Filter logs by status">
+          <button class="log-filter-btn active" data-filter="all"     id="filter-all">全部</button>
+          <button class="log-filter-btn"        data-filter="done"    id="filter-done">✓ 成功</button>
+          <button class="log-filter-btn"        data-filter="error"   id="filter-error">✕ 错误</button>
+          <button class="log-filter-btn"        data-filter="skipped" id="filter-skipped">⏭ 跳过</button>
+          <button class="log-filter-btn"        data-filter="pending" id="filter-pending">⋯ 待处理</button>
+        </div>
+
+        <div class="table-wrap">
+          <table role="table" aria-label="Operation log table">
+            <thead>
+              <tr>
+                <th scope="col">时间</th>
+                <th scope="col">原始文件</th>
+                <th scope="col">重命名为</th>
+                <th scope="col">状态</th>
+                <th scope="col">置信度</th>
+                <th scope="col">模式</th>
+                <th scope="col">备注</th>
+              </tr>
+            </thead>
+            <tbody id="logs-tbody">
+              <tr><td colspan="7" class="empty-table">加载中…</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+      </section>
+
+    </div><!-- /content -->
+  </main><!-- /main -->
+
+  <!-- ── Edit Modal ───────────────────────────────────────────────────────── -->
+  <div class="modal-overlay" id="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-dialog-title">
+    <div class="modal" id="edit-modal">
+      <div class="modal-header">
+        <h2 class="modal-title" id="modal-dialog-title">
+          编辑 — <span id="modal-title-display"></span>
+        </h2>
+        <button class="modal-close-btn" id="modal-close" aria-label="Close dialog">✕</button>
+      </div>
+
+      <input type="hidden" id="modal-item-id" />
+
+      <div class="form-group">
+        <label class="form-label" for="modal-field-title">番剧标题</label>
+        <input type="text" class="form-input" id="modal-field-title" placeholder="Detected title…" />
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label" for="modal-field-season">季度 (Season)</label>
+          <input type="number" class="form-input" id="modal-field-season" min="1" max="99" />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="modal-field-episode">话数 (Episode)</label>
+          <input type="number" class="form-input" id="modal-field-episode" min="1" max="9999" />
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label" for="modal-field-target">目标路径</label>
+        <input type="text" class="form-input mono" id="modal-field-target" placeholder="/media/Anime/…" />
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="modal-cancel">取消</button>
+        <button class="btn btn-accent" id="modal-save">✅ 保存并确认</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Toast container ─────────────────────────────────────────────────── -->
+  <div id="toast-container" aria-live="polite" aria-atomic="false"></div>
+
+  <!-- ── Scripts ─────────────────────────────────────────────────────────── -->
+  <script src="js/data.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+
+</body>
+</html>
