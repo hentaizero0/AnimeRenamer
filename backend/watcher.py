@@ -149,7 +149,7 @@ def find_all_anime_dirs(download_dir: Path) -> list[tuple[Path, str]]:
             if not child.is_dir():
                 continue
                 
-            allowed_extras = {"sp", "bonus", "extras", "nced", "ncop", "menu", "featurettes", "ova", "oad", "scans"}
+            allowed_extras = {"sp", "bonus", "extras", "nced", "ncop", "menu", "featurettes", "ova", "oad", "scans", "pv", "op", "ed"}
             child_name_lower = child.name.lower()
             if "season" in child_name_lower or any(e in child_name_lower for e in allowed_extras) or child_name_lower in ["autolinklog", "logs", "log"]:
                 continue
@@ -161,7 +161,7 @@ def find_all_anime_dirs(download_dir: Path) -> list[tuple[Path, str]]:
             has_direct_media = any(f.is_file() and f.suffix.lower() in [".mp4", ".mkv", ".avi", ".rmvb", ".ts"] for f in child.iterdir())
             has_subdirs = any(f.is_dir() for f in child.iterdir())
             
-            allowed_extras = {"sp", "bonus", "extras", "nced", "ncop", "menu", "featurettes", "ova", "oad", "scans"}
+            allowed_extras = {"sp", "bonus", "extras", "nced", "ncop", "menu", "featurettes", "ova", "oad", "scans", "pv", "op", "ed"}
             has_season_folders = any(f.is_dir() and ("season" in f.name.lower() or f.name.lower() in allowed_extras) for f in child.iterdir())
             
             if has_direct_media or has_season_folders:
@@ -185,7 +185,7 @@ def process_directory(dir_path: Path, config, series_db, strict: bool = False, d
     except ValueError:
         return None
         
-    allowed_extras = {"sp", "bonus", "extras", "nced", "ncop", "menu", "featurettes", "ova", "oad", "scans"}
+    allowed_extras = {"sp", "bonus", "extras", "nced", "ncop", "menu", "featurettes", "ova", "oad", "scans", "pv", "op", "ed"}
     
     files_to_process = []
     for f in dir_path.iterdir():
