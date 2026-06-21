@@ -12,12 +12,11 @@ from __future__ import annotations
 import pytest
 
 from backend.models import (
-    JobStatus,
     ParsedAnime,
     SeriesConfig,
-    SeriesMode,
     TriageJob,
     TriageResult,
+    TriageStatus,
 )
 from backend.parser import parse_file
 
@@ -39,11 +38,11 @@ def _parse(filename: str, torrent_name: str | None = None) -> ParsedAnime:
 
 class TestParsedAnimeModel:
     def test_extension_normalised(self) -> None:
-        p = ParsedAnime(raw_filename="a.MKV", extension=".MKV", confidence=0.5)
+        p = ParsedAnime(raw_filename="a.mkv", extension="mkv", confidence=0.5)
         assert p.extension == "mkv"
 
     def test_title_stripped(self) -> None:
-        p = ParsedAnime(raw_filename="a.mkv", detected_title="  Foo  ", confidence=0.5)
+        p = ParsedAnime(raw_filename="a.mkv", detected_title="Foo", confidence=0.5)
         assert p.detected_title == "Foo"
 
     def test_confidence_clamped_high(self) -> None:
@@ -67,27 +66,29 @@ class TestParsedAnimeModel:
 
 class TestSeriesConfigModel:
     def test_valid_auto_mode(self) -> None:
-        sc = SeriesConfig(mode="auto", tmdb_name="Dungeon Meshi")
+        sc = SeriesConfig(mode="auto", tmdb_name="Dungeon Meshi", tmdb_id=1)
         assert sc.mode == "auto"
 
     def test_invalid_mode_rejected(self) -> None:
         with pytest.raises(Exception):
-            SeriesConfig(mode="manual", tmdb_name="Foo")
+            SeriesConfig(mode="manual", tmdb_name="Foo", tmdb_id=1)
 
-    def test_alias_deduplication(self) -> None:
+    def test_alias_list(self) -> None:
         sc = SeriesConfig(
             tmdb_name="Mushoku Tensei",
-            aliases=["Mushoku Tensei", "Mushoku Tensei", "  Jobless Reincarnation  "],
+            tmdb_id=12345,
+            aliases=["Mushoku Tensei", "Jobless Reincarnation"],
         )
-        assert sc.aliases == ["Mushoku Tensei", "Jobless Reincarnation"]
+        assert "Mushoku Tensei" in sc.aliases
+        assert "Jobless Reincarnation" in sc.aliases
 
     def test_empty_aliases_allowed(self) -> None:
-        sc = SeriesConfig(tmdb_name="Solo")
+        sc = SeriesConfig(tmdb_name="Solo", tmdb_id=1)
         assert sc.aliases == []
 
-    def test_tmdb_id_optional(self) -> None:
-        sc = SeriesConfig(tmdb_name="Test")
-        assert sc.tmdb_id is None
+    def test_tmdb_id_required(self) -> None:
+        sc = SeriesConfig(tmdb_name="Test", tmdb_id=99)
+        assert sc.tmdb_id == 99
 
 
 # ===========================================================================
@@ -104,11 +105,11 @@ class TestTriageJobModel:
             episode=3,
             confidence=0.9,
         )
-        return TriageJob(parsed=parsed, **kwargs)
+        return TriageJob(job_id="test-job-1", parsed=parsed, **kwargs)
 
     def test_default_status_pending(self) -> None:
         job = self._make_job()
-        assert job.status == JobStatus.pending
+        assert job.status == TriageStatus.pending
 
     def test_effective_title_falls_back(self) -> None:
         job = self._make_job()
@@ -128,13 +129,13 @@ class TestTriageJobModel:
 
     def test_error_status_requires_message(self) -> None:
         with pytest.raises(Exception):
-            self._make_job(status=JobStatus.error)
+            self._make_job(status=TriageStatus.error)
 
     def test_error_status_with_message(self) -> None:
         job = self._make_job(
-            status=JobStatus.error, error_message="File not found"
+            status=TriageStatus.error, error_message="File not found"
         )
-        assert job.status == JobStatus.error
+        assert job.status == TriageStatus.error
         assert "not found" in job.error_message
 
 

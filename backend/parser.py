@@ -465,6 +465,6 @@ def _parse_stem(stem: str, ext: str) -> ParsedAnime:  # noqa: C901 (complexity O
         season=season,
         episode=episode,
         extension=ext,
-        fansub_group=fansub_group,
+        fansub_group=fansub_group or "",
         confidence=confidence,
     )

@@ -1,0 +1,18 @@
+version: "3.8"
+services:
+  anime-triage:
+    build: .
+    container_name: anime-triage
+    ports:
+      - "8765:8765"
+    environment:
+      - PUID=1000
+      - PGID=100
+      - TMDB_API_KEY=${TMDB_API_KEY:-}
+    volumes:
+      - /mnt/user/downloads:/downloads
+      - /mnt/user/hentaidisk/video/anime:/anime
+      - /mnt/user/hentaidisk/video/link:/jellyfin
+      - ./config:/app/config
+      - ./logs:/app/logs
+    restart: unless-stopped

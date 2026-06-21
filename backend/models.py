@@ -74,13 +74,6 @@ class ParsedAnime(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class SeriesMode(str, Enum):
-    """Whether new episodes should be processed automatically or need confirmation."""
-
-    auto = "auto"
-    confirm = "confirm"
-
-
 class SeriesConfig(BaseModel):
     """
     A user-configured series entry, typically stored in a YAML/JSON config file.
@@ -103,8 +96,6 @@ class SeriesConfig(BaseModel):
     tmdb_id: int | None = Field(default=None, ge=1, description="TMDB series ID")
     season: int = Field(1, ge=1, description="Target season number")
     aliases: list[str] = Field(default_factory=list, description="Alternative match strings")
-
-    model_config = {"frozen": True}
 
     @field_validator("aliases", mode="before")
     @classmethod
@@ -198,13 +189,15 @@ class TriageResult(BaseModel):
     source_path:   Absolute path of the original file.
     dest_path:     Absolute path of the renamed destination file.
     hardlink_path: Absolute path of the hardlink copy (None if not created).
+    error_msg:     Error message if operation failed.
     rollback_info: Arbitrary dict of information needed to undo the operation.
     """
 
-    success: bool = Field(..., description="True if the rename/hardlink operation succeeded")
+    success: bool = Field(..., description="True if the operation succeeded")
     source_path: str = Field(..., description="Absolute path to the source file")
-    dest_path: str = Field(..., description="Absolute path to the renamed destination")
+    dest_path: str | None = Field(None, description="Absolute path to the renamed destination")
     hardlink_path: str | None = Field(None, description="Absolute path to the hardlink (if created)")
+    error_msg: str | None = Field(None, description="Error message if operation failed")
     rollback_info: dict[str, Any] = Field(
         default_factory=dict,
         description="Data required to roll back this operation",
