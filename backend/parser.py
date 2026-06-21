@@ -113,6 +113,9 @@ _EXPLICIT_SEASON_RE = re.compile(
     re.IGNORECASE,
 )
 
+# SxxExx format: S02E01
+_SXEXX_RE = re.compile(r"\bS(\d{1,2})E(\d{1,4})\b", re.IGNORECASE)
+
 # Trailing title digit: "KonoSuba 3 - 01" → season 3
 # (used only when no other season found and digit precedes separator)
 _TRAILING_TITLE_DIGIT_RE = re.compile(
@@ -342,6 +345,45 @@ def _compute_confidence(
     return max(0.0, min(1.0, score))
 
 
+def is_likely_anime(parsed: ParsedAnime) -> bool:
+    """
+    判断一个解析结果是否「很可能是动画文件」。
+    
+    判断逻辑（AND 关系，都满足才算是动画）：
+    - 有集数（episode is not None）
+    - 置信度 >= 0.65
+    - OR 有字幕组标签（fansub_group 非空）
+    
+    不是动画的特征：
+    - 纯中文个人视频名（无集数、无字幕组）
+    - 以下划线/连字符开头（私人文件）
+    - 文件名包含「使用Clipchamp」「直拍」「YTDown」等关键词
+    """
+    filename = parsed.raw_filename
+    
+    # 快速否定：含有明确的非动画关键词
+    non_anime_keywords = ["Clipchamp", "YTDown", "直拍", "马儿跳", "制作"]
+    if any(kw in filename for kw in non_anime_keywords):
+        return False
+    
+    # 快速否定：文件名以下划线开头且没有字幕组
+    if filename.startswith("_") and not parsed.fansub_group:
+        return False
+    
+    # 核心判断：有集数 OR (有字幕组 AND 置信度高)
+    has_episode = parsed.episode is not None
+    has_fansub = bool(parsed.fansub_group)
+    high_conf = parsed.confidence >= 0.65
+    
+    if has_episode and (has_fansub or high_conf):
+        return True
+    
+    if has_fansub and high_conf:
+        return True
+    
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -380,7 +422,7 @@ def parse_file(filename: str, torrent_name: str | None = None) -> ParsedAnime:
             return ParsedAnime(
                 raw_filename=filename,
                 detected_title=result.detected_title,
-                season=result.season,
+                season=result.season if result.season != 0 else None,
                 episode=episode_from_stem,
                 extension=ext,
                 fansub_group=result.fansub_group,
@@ -389,7 +431,7 @@ def parse_file(filename: str, torrent_name: str | None = None) -> ParsedAnime:
         return ParsedAnime(
             raw_filename=filename,
             detected_title=result.detected_title,
-            season=result.season,
+            season=result.season if result.season != 0 else None,
             episode=result.episode if result.episode is not None else episode_from_stem,
             extension=ext,
             fansub_group=result.fansub_group,
@@ -400,7 +442,7 @@ def parse_file(filename: str, torrent_name: str | None = None) -> ParsedAnime:
     return ParsedAnime(
         raw_filename=filename,
         detected_title=result.detected_title,
-        season=result.season,
+        season=result.season if result.season != 0 else None,
         episode=result.episode,
         extension=ext,
         fansub_group=result.fansub_group,
@@ -428,11 +470,26 @@ def _parse_stem(stem: str, ext: str) -> ParsedAnime:  # noqa: C901 (complexity O
     # 2. Extract fansub group
     working, fansub_group = _extract_fansub(working)
 
-    # 3. Extract season (modifies working string)
-    working, season, season_flags = _extract_season(working)
+    # 3. Extract season and episode
+    season: int | None = None
+    episode: int | None = None
+    season_flags: list[str] = []
+    ep_flags: list[str] = []
 
-    # 4. Extract episode (modifies working string)
-    working, episode, ep_flags = _extract_episode(working)
+    # 0. 优先提取 SxxExx 联合格式（如 S02E01）
+    sxex_match = _SXEXX_RE.search(working)
+    if sxex_match:
+        season = int(sxex_match.group(1))
+        episode = int(sxex_match.group(2))
+        working = working[:sxex_match.start()] + working[sxex_match.end():]
+        season_flags = ["sxex"]
+        ep_flags = ["sxex"]
+    else:
+        # Extract season (modifies working string)
+        working, season, season_flags = _extract_season(working)
+
+        # Extract episode (modifies working string)
+        working, episode, ep_flags = _extract_episode(working)
 
     # 5. Strip codec / resolution / language junk tags
     working = _strip_junk_tags(working)
@@ -458,6 +515,9 @@ def _parse_stem(stem: str, ext: str) -> ParsedAnime:  # noqa: C901 (complexity O
         season_flags=season_flags,
         ext_known=ext_known,
     )
+
+    if season == 0:
+        season = None
 
     return ParsedAnime(
         raw_filename=stem,

@@ -4,7 +4,7 @@ from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-from backend.parser import parse_file
+from backend.parser import parse_file, is_likely_anime
 from backend.models import TriageJob, TriageStatus
 from backend.config import load_config, SeriesDB
 from backend.triage import execute_triage_job
@@ -32,6 +32,11 @@ class DownloadDirHandler(FileSystemEventHandler):
         
         try:
             parsed = parse_file(str(path.name))
+            
+            # 过滤非动画文件
+            if not is_likely_anime(parsed):
+                print(f"[watcher] Skipped (not anime): {path.name}")
+                return
             
             # Lookup in SeriesDB
             s_conf = None

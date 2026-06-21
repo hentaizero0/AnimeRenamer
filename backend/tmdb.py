@@ -31,69 +31,73 @@ class TmdbClient:
             return []
             
         async with httpx.AsyncClient() as client:
-            try:
-                # Search TV shows
-                params = {**self.params, "query": title, "language": "zh-CN"}
-                # If using api_key param, we don't need auth header
-                headers = self.headers if "Authorization" in self.headers else {"accept": "application/json"}
+            zh_results = await self._search_once(client, title, language="zh-CN")
+            en_results = await self._search_once(client, title, language="en-US")
+            
+            merged: dict[int, TmdbMatch] = {}
+            for r in zh_results + en_results:
+                if r.tmdb_id not in merged or r.confidence > merged[r.tmdb_id].confidence:
+                    merged[r.tmdb_id] = r
+            
+            results = sorted(merged.values(), key=lambda x: x.confidence, reverse=True)
+            return results
+
+    async def _search_once(self, client: httpx.AsyncClient, title: str, language: str) -> list[TmdbMatch]:
+        try:
+            params = {**self.params, "query": title, "language": language}
+            headers = self.headers if "Authorization" in self.headers else {"accept": "application/json"}
+            
+            resp = await client.get(
+                f"{self.base_url}/search/tv",
+                params=params,
+                headers=headers,
+                timeout=10.0
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            
+            results = []
+            for item in data.get("results", []):
+                tmdb_id = item["id"]
+                name = item.get("name", "")
+                original_name = item.get("original_name", "")
                 
-                resp = await client.get(
-                    f"{self.base_url}/search/tv",
-                    params=params,
+                # Fetch details to get season count
+                details_resp = await client.get(
+                    f"{self.base_url}/tv/{tmdb_id}",
+                    params={**self.params, "language": language},
                     headers=headers,
                     timeout=10.0
                 )
-                resp.raise_for_status()
-                data = resp.json()
+                details = {}
+                if details_resp.status_code == 200:
+                    details = details_resp.json()
+                    
+                season_count = details.get("number_of_seasons", 1)
                 
-                results = []
-                for item in data.get("results", []):
-                    tmdb_id = item["id"]
-                    name = item.get("name", "")
-                    original_name = item.get("original_name", "")
-                    
-                    # Fetch details to get season count
-                    details_resp = await client.get(
-                        f"{self.base_url}/tv/{tmdb_id}",
-                        params={**self.params, "language": "zh-CN"},
-                        headers=headers,
-                        timeout=10.0
-                    )
-                    details = {}
-                    if details_resp.status_code == 200:
-                        details = details_resp.json()
-                        
-                    season_count = details.get("number_of_seasons", 1)
-                    
-                    # Calculate confidence
-                    # Base confidence on name similarity
-                    sim1 = fuzz.ratio(title.lower(), name.lower()) / 100.0
-                    sim2 = fuzz.ratio(title.lower(), original_name.lower()) / 100.0
-                    base_conf = max(sim1, sim2) * 0.7
-                    
-                    # Boosts
-                    boost = 0.0
-                    if item.get("origin_country") and "JP" in item.get("origin_country"):
-                        boost += 0.1
-                    if 16 in item.get("genre_ids", []): # 16 is Animation
-                        boost += 0.1
-                        
-                    conf = min(1.0, base_conf + boost)
-                    
-                    results.append(TmdbMatch(
-                        tmdb_id=tmdb_id,
-                        name=name,
-                        original_name=original_name,
-                        season_count=season_count,
-                        confidence=conf
-                    ))
+                sim1 = fuzz.ratio(title.lower(), name.lower()) / 100.0
+                sim2 = fuzz.ratio(title.lower(), original_name.lower()) / 100.0
+                base_conf = max(sim1, sim2) * 0.7
                 
-                # Sort by confidence descending
-                results.sort(key=lambda x: x.confidence, reverse=True)
-                return results
-            except Exception as e:
-                print(f"TMDB search error: {e}")
-                return []
+                boost = 0.0
+                if item.get("origin_country") and "JP" in item.get("origin_country"):
+                    boost += 0.1
+                if 16 in item.get("genre_ids", []):
+                    boost += 0.1
+                    
+                conf = min(1.0, base_conf + boost)
+                
+                results.append(TmdbMatch(
+                    tmdb_id=tmdb_id,
+                    name=name,
+                    original_name=original_name,
+                    season_count=season_count,
+                    confidence=conf
+                ))
+            return results
+        except Exception as e:
+            print(f"TMDB search error ({language}): {e}")
+            return []
 
     async def verify_episode(self, tmdb_id: int, season: int, episode: int) -> bool:
         if not self.api_key:
