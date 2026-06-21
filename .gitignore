@@ -1,0 +1,61 @@
+# ── Python ───────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Virtual Environments ──────────────────────────────────
+.venv/
+venv/
+env/
+.env
+
+# ── Secrets & Config Overrides ───────────────────────────
+# Keep config/series_config.yaml in git (no real secrets there)
+# but ignore any local .env override
+*.env.local
+.env.local
+
+# ── Regression / Test Data ───────────────────────────────
+# These are ephemeral test sandboxes, not source code
+regression_downloads/
+regression_target/
+regression_anime/
+
+# ── Runtime Logs ─────────────────────────────────────────
+*.log
+app.log
+
+# ── Editor / OS junk ─────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# ── Docker runtime ───────────────────────────────────────
+# docker-compose.override.yml can be local overrides
+docker-compose.override.yml
+
+# ── Misc dev artifacts ───────────────────────────────────
+# unriad.output is your personal NAS tree snapshot, not needed in repo
+unriad.output
+parse_tree.py

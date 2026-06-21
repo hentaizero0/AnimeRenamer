@@ -14,7 +14,8 @@ import pytest
 from backend.models import (
     ParsedAnime,
     SeriesConfig,
-    TriageJob,
+    FileTriageItem,
+    BatchTriageJob,
     TriageResult,
     TriageStatus,
 )
@@ -97,7 +98,7 @@ class TestSeriesConfigModel:
 
 
 class TestTriageJobModel:
-    def _make_job(self, **kwargs) -> TriageJob:
+    def _make_job(self, **kwargs) -> BatchTriageJob:
         parsed = ParsedAnime(
             raw_filename="foo.mkv",
             detected_title="Foo",
@@ -105,7 +106,8 @@ class TestTriageJobModel:
             episode=3,
             confidence=0.9,
         )
-        return TriageJob(job_id="test-job-1", parsed=parsed, **kwargs)
+        item = FileTriageItem(relative_path="foo.mkv", parsed=parsed, is_video=True)
+        return BatchTriageJob(id="test-job-1", source_dir=".", items=[item], **kwargs)
 
     def test_default_status_pending(self) -> None:
         job = self._make_job()
@@ -125,7 +127,7 @@ class TestTriageJobModel:
 
     def test_effective_episode_override(self) -> None:
         job = self._make_job(override_episode=99)
-        assert job.effective_episode == 99
+        assert job.override_episode == 99
 
     def test_error_status_requires_message(self) -> None:
         with pytest.raises(Exception):

@@ -5,7 +5,7 @@ const API_BASE = 'http://localhost:8765/api';
 let _apiOnline = null; // null = untested, true/false = cached result
 
 async function _checkOnline() {
-  if (_apiOnline !== null) return _apiOnline;
+  if (_apiOnline === true) return true;
   try {
     const r = await fetch(`${API_BASE}/stats`, { signal: AbortSignal.timeout(1500) });
     _apiOnline = r.ok;
@@ -58,6 +58,9 @@ const API = {
   async getRecent() {
     return (await _get('/recent')) ?? MOCK.recent;
   },
+  async getIgnored() {
+    return (await _get('/ignored')) ?? [];
+  },
   async getSeries() {
     return (await _get('/series')) ?? MOCK.series;
   },
@@ -84,6 +87,15 @@ const API = {
       MOCK.stats.pending = Math.max(0, MOCK.stats.pending - 1);
     }
     return res ?? { ok: true };
+  },
+  getDirectories: async () => {
+    return (await _get('/directories')) ?? [];
+  },
+  getAutoSubscriptions: async () => {
+    return (await _get('/auto_subscriptions')) ?? [];
+  },
+  updateDirectoryMode: async (folder, mode) => {
+    return await _post(`/directories/${encodeURIComponent(folder)}/mode`, { mode });
   },
   isOnline() { return _apiOnline === true; },
 };

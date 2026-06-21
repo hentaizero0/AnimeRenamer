@@ -39,10 +39,17 @@ _VIDEO_EXTS: frozenset[str] = frozenset(
 # Tags that should be stripped from the title / remaining string.
 # Order matters: more-specific patterns first.
 _JUNK_TAGS: list[re.Pattern[str]] = [p for p in [
+    # Whole bracket blocks that are pure tech specs (contains any codec/resolution keyword)
+    re.compile(
+        r"\[[^\]]*"
+        r"(?:SRTx?\d*|FLACx?\d*|HEVC|AVC|1080p|720p|480p|BDRip|WebRip|WEB-DL|10.?bit)"
+        r"[^\]]*\]",
+        re.IGNORECASE,
+    ),
     # Resolution / codec quality tags  (grouped in brackets or standalone)
     re.compile(
         r"[\[(]?"
-        r"(?:4K|2160p|1080p|720p|576p|480p|360p)"
+        r"(?:4K|2160p|1080p|720p|576p|480p|360p|\d{3,4}x\d{3,4})"
         r"(?:[^\])\s]*)?"  # optional extra qualifiers like "1080p60"
         r"[\])]?",
         re.IGNORECASE,
@@ -61,15 +68,21 @@ _JUNK_TAGS: list[re.Pattern[str]] = [p for p in [
         r"[\])]?",
         re.IGNORECASE,
     ),
+    # Subtitle track count tags: SRTx2, ASSx2, PGSx2
+    re.compile(r"\b(?:SRT|ASS|PGS|SSA)x?\d*\b", re.IGNORECASE),
+    # Bit-depth tags: 10bit, 10-bit, 8bit
+    re.compile(r"\b\d+[-]?bit\b", re.IGNORECASE),
     re.compile(r"\bDualAudio\b", re.IGNORECASE),
     re.compile(r"\bWebRip\b", re.IGNORECASE),
     re.compile(r"\bBDRip\b", re.IGNORECASE),
     re.compile(r"\bBlu-?Ray\b", re.IGNORECASE),
     re.compile(r"\bHDTV\b", re.IGNORECASE),
     re.compile(r"\bWEB-DL\b", re.IGNORECASE),
+    re.compile(r"\bBD\b", re.IGNORECASE),
     re.compile(r"\b(?:GB|BIG5|BIG5-MP4|MP4|MKV)\b", re.IGNORECASE),
     # Language/subtitle tags
     re.compile(r"\b(?:CHT|CHS|JPN|ENG|MULTI|Sub|Dub)\b", re.IGNORECASE),
+    re.compile(r"简繁外挂|简繁|日中|双语", re.IGNORECASE),
     # Hash/CRC tags — [A1B2C3D4]
     re.compile(r"\[[0-9A-Fa-f]{6,8}\]"),
     # Bare parenthetical junk: (v2), (BD), (END), (FINAL)
@@ -288,12 +301,33 @@ def _clean_title(text: str) -> str:
     - Collapse multiple spaces.
     - Strip leading/trailing dashes, spaces.
     """
-    # Remove empty brackets
-    text = re.sub(r"\[\s*\]|\(\s*\)", "", text)
+    # Remove leftover sub-extension like .tc, .sc, .chs, .cht at the end of the stem
+    text = re.sub(r"\.(tc|sc|chs|cht|en|ja)\s*$", "", text, flags=re.IGNORECASE)
+    
+    # Remove brackets that only contain spaces, ampersands, or dashes
+    text = re.sub(r"\[[\s&\-]*\]|\([\s&\-]*\)", "", text)
     # Remove unmatched opening brackets at start
-    text = re.sub(r"^\s*[\[({]+\s*", "", text)
+    while text and text[0] in "([{":
+        c = text[0]
+        cl = {"(": ")", "[": "]", "{": "}"}[c]
+        if text.count(cl) < text.count(c):
+            text = text[1:].lstrip()
+        else:
+            break
+
     # Remove unmatched closing brackets at end
-    text = re.sub(r"\s*[\])}]+\s*$", "", text)
+    while text and text[-1] in ")]}":
+        c = text[-1]
+        op = {")": "(", "]": "[", "}": "{"}[c]
+        if text.count(op) < text.count(c):
+            text = text[:-1].rstrip()
+        else:
+            break
+    
+    # If the entire title is wrapped in one pair of brackets, unwrap it: "[Title]" -> "Title"
+    if re.fullmatch(r"\[[^\]]+\]", text.strip()):
+        text = text.strip()[1:-1]
+        
     text = _LEADING_TRAILING_DASH_RE.sub("", text)
     text = _MULTI_SPACE_RE.sub(" ", text)
     return text.strip()
@@ -368,6 +402,10 @@ def is_likely_anime(parsed: ParsedAnime) -> bool:
     
     # 快速否定：文件名以下划线开头且没有字幕组
     if filename.startswith("_") and not parsed.fansub_group:
+        return False
+        
+    # 快速否定：类似 JAV 番号（如 HMN-239）且没有字幕组
+    if re.search(r"^[a-zA-Z]{2,5}-\d{3,4}", filename) and not parsed.fansub_group:
         return False
     
     # 核心判断：有集数 OR (有字幕组 AND 置信度高)
