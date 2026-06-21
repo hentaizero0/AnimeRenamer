@@ -560,13 +560,22 @@ async def update_directory_mode(folder_name: str, update: DirectoryModeUpdate) -
 
 @app.get("/api/auto_subscriptions")
 async def get_auto_subscriptions():
+    from backend.models import TriageStatus
     download_dir = Path(config.download_dir)
     dirs = find_all_anime_dirs(download_dir)
     res = []
+    
+    conflicted_paths = set()
+    for job in queue.values():
+        if job.status == TriageStatus.pending and getattr(job, "has_conflict", False):
+            conflicted_paths.add(job.source_dir)
+            
     for d, mode in dirs:
         if mode == "auto":
             try:
                 rel = str(d.relative_to(download_dir))
+                if rel in conflicted_paths:
+                    continue
                 res.append({
                     "name": d.name,
                     "path": rel,
