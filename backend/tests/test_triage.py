@@ -1,21 +1,10 @@
 import pytest
+import os
+import shutil
 from pathlib import Path
-from backend.triage import build_target_path, rename_and_move, create_hardlink, rollback
-
-
-class TestBuildTargetPath:
-    def test_format(self):
-        result = build_target_path("无职转生", 2, 13, "mkv", Path("/anime"))
-        assert result == Path("/anime/无职转生/Season 2/无职转生 S02E13.mkv")
-
-    def test_season_zero_padding(self):
-        result = build_target_path("TestAnime", 1, 5, "mkv", Path("/anime"))
-        assert "S01E05" in result.name
-
-    def test_episode_zero_padding(self):
-        result = build_target_path("TestAnime", 1, 1, "mkv", Path("/anime"))
-        assert "S01E01" in result.name
-
+from backend.models import BatchTriageJob, FileTriageItem, ParsedAnime, TriageStatus, SeriesConfig
+from backend.config import AppConfig
+from backend.triage import rename_and_move, create_hardlink, execute_triage_job
 
 class TestRenameAndMove:
     def test_dry_run_always_succeeds(self, tmp_path):
@@ -56,7 +45,6 @@ class TestRenameAndMove:
         res = rename_and_move(src, dst, dry_run=False)
         assert res.success is False
 
-
 class TestCreateHardlink:
     def test_creates_hardlink(self, tmp_path):
         src = tmp_path / "source.mkv"
@@ -91,32 +79,253 @@ class TestCreateHardlink:
         res = create_hardlink(src, link, dry_run=False)
         assert res.success is True
 
+class TestExecuteTriageJob:
+    @pytest.fixture
+    def setup_dirs(self, tmp_path):
+        download_dir = tmp_path / "downloads"
+        storage_dir = tmp_path / "storage"
+        airing_dir = tmp_path / "airing"
+        
+        download_dir.mkdir()
+        storage_dir.mkdir()
+        airing_dir.mkdir()
+        
+        config = AppConfig(
+            download_dir=str(download_dir),
+            storage_dir=str(storage_dir),
+            jellyfin_airing_dir=str(airing_dir),
+            jellyfin_collect_dir=str(airing_dir),
+            default_mode="confirm"
+        )
+        return download_dir, storage_dir, airing_dir, config
 
-class TestRollback:
-    def test_rollback_move(self, tmp_path):
-        src = tmp_path / "original.mkv"
+    @pytest.mark.asyncio
+    async def test_execute_triage_basic(self, setup_dirs):
+        download_dir, storage_dir, airing_dir, config = setup_dirs
+        
+        # Create a source file
+        video_rel = "Frieren/Frieren - 01.mkv"
+        video_src = download_dir / video_rel
+        video_src.parent.mkdir(parents=True, exist_ok=True)
+        video_src.write_text("video content")
+        
+        parsed = ParsedAnime(raw_filename="Frieren - 01.mkv", detected_title="Frieren", season=1, episode=1, extension="mkv", confidence=0.9)
+        item = FileTriageItem(relative_path=video_rel, parsed=parsed, is_video=True)
+        job = BatchTriageJob(id="job1", source_dir="Frieren", items=[item])
+        
+        res = await execute_triage_job(job, config, dry_run=False)
+        assert res.success is True
+        
+        dest_file = storage_dir / "Frieren" / "Season 01" / "Frieren S01E01.mkv"
+        assert dest_file.exists()
+        assert not video_src.exists()
+        
+        link_file = airing_dir / "Frieren" / "Season 01" / "Frieren S01E01.mkv"
+        assert link_file.exists()
+
+    @pytest.mark.asyncio
+    async def test_execute_triage_with_subtitles(self, setup_dirs):
+        download_dir, storage_dir, airing_dir, config = setup_dirs
+        
+        video_rel = "Frieren/Frieren - 02.mkv"
+        sub_rel = "Frieren/Frieren - 02.sc.ass"
+        
+        (download_dir / video_rel).parent.mkdir(parents=True, exist_ok=True)
+        (download_dir / video_rel).write_text("video")
+        (download_dir / sub_rel).write_text("subtitle")
+        
+        p_video = ParsedAnime(raw_filename="Frieren - 02.mkv", detected_title="Frieren", season=1, episode=2, extension="mkv", confidence=0.9)
+        p_sub = ParsedAnime(raw_filename="Frieren - 02.sc.ass", detected_title="Frieren", season=1, episode=2, extension="sc.ass", confidence=0.9)
+        
+        item_v = FileTriageItem(relative_path=video_rel, parsed=p_video, is_video=True)
+        item_s = FileTriageItem(relative_path=sub_rel, parsed=p_sub, is_video=False)
+        
+        job = BatchTriageJob(id="job2", source_dir="Frieren", items=[item_v, item_s])
+        
+        res = await execute_triage_job(job, config, dry_run=False)
+        assert res.success is True
+        
+        assert (storage_dir / "Frieren" / "Season 01" / "Frieren S01E02.mkv").exists()
+        assert (storage_dir / "Frieren" / "Season 01" / "Frieren S01E02.sc.ass").exists()
+        assert (airing_dir / "Frieren" / "Season 01" / "Frieren S01E02.mkv").exists()
+        assert (airing_dir / "Frieren" / "Season 01" / "Frieren S01E02.sc.ass").exists()
+
+    @pytest.mark.asyncio
+    async def test_execute_triage_skip_ignored(self, setup_dirs):
+        download_dir, storage_dir, airing_dir, config = setup_dirs
+        
+        video_rel = "Frieren - 03.mkv"
+        (download_dir / video_rel).write_text("video")
+        
+        p_video = ParsedAnime(raw_filename="Frieren - 03.mkv", detected_title="Frieren", season=1, episode=3, extension="mkv", confidence=0.9)
+        item = FileTriageItem(relative_path=video_rel, parsed=p_video, is_video=True, ignored=True)
+        
+        job = BatchTriageJob(id="job3", source_dir=".", items=[item])
+        
+        res = await execute_triage_job(job, config, dry_run=False)
+        assert res.success is True
+        assert not (storage_dir / "Frieren" / "Season 01" / "Frieren S01E03.mkv").exists()
+        assert (download_dir / video_rel).exists() # Ignored files should not be moved
+
+    def test_moves_file_exception(self, tmp_path, monkeypatch):
+        src = tmp_path / "source.mkv"
         src.write_text("data")
-        dst = tmp_path / "moved.mkv"
-        mv_res = rename_and_move(src, dst, dry_run=False)
-        assert dst.exists()
-        ok = rollback(mv_res)
-        assert ok is True
-        assert src.exists()
-        assert not dst.exists()
+        dst = tmp_path / "dest.mkv"
+        import shutil
+        def mock_move(*args, **kwargs):
+            raise OSError("permission denied")
+        monkeypatch.setattr(shutil, "move", mock_move)
+        res = rename_and_move(src, dst, dry_run=False)
+        assert res.success is False
+        assert "permission denied" in res.error_msg
 
-    def test_rollback_link(self, tmp_path):
+    def test_creates_hardlink_source_missing(self, tmp_path):
+        src = tmp_path / "nonexistent.mkv"
+        link = tmp_path / "link.mkv"
+        res = create_hardlink(src, link, dry_run=False)
+        assert res.success is False
+        assert "Source does not exist" in res.error_msg
+
+    def test_creates_hardlink_exception(self, tmp_path, monkeypatch):
         src = tmp_path / "source.mkv"
         src.write_text("data")
         link = tmp_path / "link.mkv"
-        link_res = create_hardlink(src, link, dry_run=False)
-        assert link.exists()
-        ok = rollback(link_res)
-        assert ok is True
-        assert not link.exists()
-        assert src.exists()
+        import os
+        def mock_link(*args, **kwargs):
+            raise OSError("no space left on device")
+        monkeypatch.setattr(os, "link", mock_link)
+        res = create_hardlink(src, link, dry_run=False)
+        assert res.success is False
+        assert "no space" in res.error_msg
 
-    def test_rollback_empty_info_is_noop(self):
-        from backend.models import TriageResult
-        r = TriageResult(success=True, source_path="/foo")
-        ok = rollback(r)
-        assert ok is True
+    @pytest.mark.asyncio
+    async def test_execute_triage_source_missing_skip(self, setup_dirs):
+        download_dir, storage_dir, airing_dir, config = setup_dirs
+        p_video = ParsedAnime(raw_filename="Frieren - 04.mkv", detected_title="Frieren", season=1, episode=4, extension="mkv")
+        item = FileTriageItem(relative_path="Frieren/Frieren - 04.mkv", parsed=p_video, is_video=True)
+        job = BatchTriageJob(id="job4", source_dir="Frieren", items=[item])
+        res = await execute_triage_job(job, config, dry_run=False)
+        assert res.success is True
+
+    @pytest.mark.asyncio
+    async def test_execute_triage_fallback_filename(self, setup_dirs):
+        download_dir, storage_dir, airing_dir, config = setup_dirs
+        sub_rel = "Frieren - 05.sc.ass"
+        (download_dir / sub_rel).write_text("subtitle")
+        p_sub = ParsedAnime(raw_filename="Frieren - 05.sc.ass", detected_title="Frieren", season=1, episode=5, extension="sc.ass")
+        item = FileTriageItem(relative_path=sub_rel, parsed=p_sub, is_video=False)
+        job = BatchTriageJob(id="job5", source_dir=".", items=[item])
+        res = await execute_triage_job(job, config, dry_run=False)
+        assert res.success is True
+        assert (storage_dir / "Frieren" / "Season 01" / "Frieren S01E05.sc.ass").exists()
+
+    @pytest.mark.asyncio
+    async def test_execute_triage_move_fail(self, setup_dirs):
+        download_dir, storage_dir, airing_dir, config = setup_dirs
+        video_rel = "Frieren - 06.mkv"
+        (download_dir / video_rel).write_text("video")
+        
+        dst_file = storage_dir / "Frieren" / "Season 01" / "Frieren S01E06.mkv"
+        dst_file.parent.mkdir(parents=True, exist_ok=True)
+        dst_file.write_text("already exists")
+        
+        p_video = ParsedAnime(raw_filename="Frieren - 06.mkv", detected_title="Frieren", season=1, episode=6, extension="mkv")
+        item = FileTriageItem(relative_path=video_rel, parsed=p_video, is_video=True)
+        job = BatchTriageJob(id="job6", source_dir=".", items=[item])
+        res = await execute_triage_job(job, config, dry_run=False)
+        assert res.success is False
+        assert "already exists" in res.error_msg
+
+    @pytest.mark.asyncio
+    async def test_execute_triage_no_episode_extra(self, setup_dirs):
+        download_dir, storage_dir, airing_dir, config = setup_dirs
+        extra_rel = "behind_scenes.mkv"
+        (download_dir / extra_rel).write_text("behind the scenes")
+        
+        p_extra = ParsedAnime(raw_filename="behind_scenes.mkv", detected_title="Frieren", season=None, episode=None, extension="mkv")
+        item = FileTriageItem(relative_path=extra_rel, parsed=p_extra, is_video=True)
+        job = BatchTriageJob(id="job7", source_dir=".", items=[item])
+        res = await execute_triage_job(job, config, dry_run=False)
+        assert res.success is True
+        assert (storage_dir / "Frieren" / "behind_scenes.mkv").exists()
+
+    @pytest.mark.asyncio
+    async def test_execute_triage_no_episode_value_error(self, setup_dirs):
+        download_dir, storage_dir, airing_dir, config = setup_dirs
+        # File is outside job.source_dir, triggering ValueError in relative_to
+        extra_rel = "OutsideFolder/extra.mkv"
+        (download_dir / extra_rel).parent.mkdir(parents=True, exist_ok=True)
+        (download_dir / extra_rel).write_text("extra")
+        
+        p_extra = ParsedAnime(raw_filename="extra.mkv", detected_title="Frieren", season=None, episode=None, extension="mkv")
+        item = FileTriageItem(relative_path=extra_rel, parsed=p_extra, is_video=True)
+        job = BatchTriageJob(id="job7_val_err", source_dir="Frieren", items=[item])
+        res = await execute_triage_job(job, config, dry_run=False)
+        assert res.success is True
+        assert (storage_dir / "Frieren" / "extra.mkv").exists()
+
+    @pytest.mark.asyncio
+    async def test_execute_triage_cleanup_remaining_files(self, setup_dirs):
+        download_dir, storage_dir, airing_dir, config = setup_dirs
+        
+        video_rel = "Frieren/Frieren - 01.mkv"
+        (download_dir / video_rel).parent.mkdir(parents=True, exist_ok=True)
+        (download_dir / video_rel).write_text("video")
+        
+        # Create a remaining file that is NOT in the job items
+        remaining_rel = "Frieren/remaining_metadata.nfo"
+        (download_dir / remaining_rel).write_text("metadata content")
+        
+        p_video = ParsedAnime(raw_filename="Frieren - 01.mkv", detected_title="Frieren", season=1, episode=1, extension="mkv")
+        item = FileTriageItem(relative_path=video_rel, parsed=p_video, is_video=True)
+        
+        job = BatchTriageJob(id="job_cleanup", source_dir="Frieren", items=[item])
+        res = await execute_triage_job(job, config, dry_run=False)
+        assert res.success is True
+        
+        # Verify the remaining file was swept to storage and the source folder was deleted
+        assert (storage_dir / "Frieren" / "remaining_metadata.nfo").exists()
+        assert not (download_dir / "Frieren").exists()
+
+    @pytest.mark.asyncio
+    async def test_execute_triage_rmtree_exception(self, setup_dirs, monkeypatch):
+        download_dir, storage_dir, airing_dir, config = setup_dirs
+        video_rel = "Frieren/Frieren - 07.mkv"
+        (download_dir / video_rel).parent.mkdir(parents=True, exist_ok=True)
+        (download_dir / video_rel).write_text("video")
+        
+        p_video = ParsedAnime(raw_filename="Frieren - 07.mkv", detected_title="Frieren", season=1, episode=7, extension="mkv")
+        item = FileTriageItem(relative_path=video_rel, parsed=p_video, is_video=True)
+        job = BatchTriageJob(id="job8", source_dir="Frieren", items=[item])
+        
+        def mock_rmtree(*args, **kwargs):
+            raise OSError("cannot delete")
+        monkeypatch.setattr(shutil, "rmtree", mock_rmtree)
+        
+        res = await execute_triage_job(job, config, dry_run=False)
+        assert res.success is True
+
+    @pytest.mark.asyncio
+    async def test_execute_triage_auto_mode(self, setup_dirs):
+        download_dir, storage_dir, airing_dir, config = setup_dirs
+        
+        video_rel = "Frieren/Frieren - 08.mkv"
+        (download_dir / video_rel).parent.mkdir(parents=True, exist_ok=True)
+        (download_dir / video_rel).write_text("video")
+        
+        p_video = ParsedAnime(raw_filename="Frieren - 08.mkv", detected_title="Frieren", season=1, episode=8, extension="mkv")
+        item = FileTriageItem(relative_path=video_rel, parsed=p_video, is_video=True)
+        s_conf = SeriesConfig(mode="auto", tmdb_name="Frieren", season=1)
+        job = BatchTriageJob(id="job_auto_mode", source_dir="Frieren", items=[item], series_config=s_conf)
+        
+        res = await execute_triage_job(job, config, dry_run=False)
+        assert res.success is True
+        
+        # In auto mode, it should be renamed in place in the downloads directory
+        assert (download_dir / "Frieren" / "Frieren S01E08.mkv").exists()
+        
+        # And hardlinked into the airing directory without "Season XX" subfolder
+        assert (airing_dir / "Frieren" / "Frieren S01E08.mkv").exists()
+        
+        # It should NOT be moved into the storage directory
+        assert not (storage_dir / "Frieren" / "Season 01" / "Frieren S01E08.mkv").exists()

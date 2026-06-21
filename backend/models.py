@@ -8,6 +8,7 @@ TriageJob is mutable so its status and override fields can be updated in-place.
 from __future__ import annotations
 
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -26,6 +27,7 @@ class TriageStatus(str, Enum):
     skipped = "skipped"
     done = "done"
     error = "error"
+    ignored = "ignored"
 
 
 # ---------------------------------------------------------------------------
@@ -115,63 +117,70 @@ class SeriesConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class TriageJob(BaseModel):
+class FileTriageItem(BaseModel):
+    relative_path: str = Field(..., description="Path relative to download_dir")
+    parsed: ParsedAnime | None = Field(default=None)
+    is_video: bool = Field(default=False)
+    ignored: bool = Field(default=False, description="If true, skip renaming and tracking this file")
+
+class BatchTriageJob(BaseModel):
     """
-    Represents a single file that is queued for (or has completed) renaming.
-
-    The `parsed` field holds the raw parser output.  Override fields allow the
-    operator (human or auto-confirm logic) to correct the parsed values before
-    the file operation is executed.
-
-    Fields
-    ------
-    parsed:           Output from the filename parser.
-    status:           Current lifecycle state.
-    override_title:   Operator-supplied title override.
-    override_season:  Operator-supplied season override.
-    override_episode: Operator-supplied episode override.
-    series_config:    Matched SeriesConfig entry, if any.
-    error_message:    Human-readable error string when status == 'error'.
+    Represents a batch of files (usually a directory) queued for renaming.
     """
 
-    parsed: ParsedAnime
+    id: str = Field(..., description="Unique job ID")
+    source_dir: str = Field(..., description="Relative directory path (e.g. 'Bangumi/Frieren') or '.'")
+    items: list[FileTriageItem] = Field(default_factory=list)
     status: TriageStatus = Field(default=TriageStatus.pending)
     override_title: str | None = Field(default=None)
     override_season: int | None = Field(default=None, ge=1)
-    override_episode: int | None = Field(default=None, ge=0)
+    override_episode: int | None = Field(None, description="Manually specified episode (or starting episode)")
     series_config: SeriesConfig | None = Field(default=None)
     error_message: str | None = Field(default=None)
+    ignore_reason: str | None = Field(None, description="Reason why this job was ignored")
+    default_mode: str | None = Field(default=None, description="Default mode inherited from download root")
 
     @model_validator(mode="after")
-    def _validate_error_state(self) -> "TriageJob":
+    def _validate_error_state(self) -> "BatchTriageJob":
         if self.status == TriageStatus.error and not self.error_message:
-            raise ValueError(
-                "error_message must be set when status is TriageStatus.error"
-            )
+            raise ValueError("error_message must be set when status is error")
         return self
 
     @property
     def effective_title(self) -> str:
-        """Return the override title if set, else the parser-detected title."""
-        return self.override_title or self.parsed.detected_title
+        if self.override_title:
+            return self.override_title
+        if self.series_config and self.series_config.tmdb_name:
+            return self.series_config.tmdb_name
+        for it in self.items:
+            if it.parsed and it.parsed.detected_title:
+                return it.parsed.detected_title
+        return Path(self.source_dir).name if self.source_dir != "." else "Unknown"
 
     @property
-    def effective_season(self) -> int | None:
-        """Return the override season, else the parser-detected season."""
-        return (
-            self.override_season
-            if self.override_season is not None
-            else self.parsed.season
-        )
+    def effective_season(self) -> int:
+        if self.override_season is not None:
+            return self.override_season
+        if self.series_config and self.series_config.season:
+            return self.series_config.season
+        for it in self.items:
+            if it.parsed and it.parsed.season is not None:
+                return it.parsed.season
+        return 1
 
     @property
-    def effective_episode(self) -> int | None:
-        """Return the override episode, else the parser-detected episode."""
-        return (
-            self.override_episode
-            if self.override_episode is not None
-            else self.parsed.episode
-        )
+    def confidence(self) -> float:
+        confs = [it.parsed.confidence for it in self.items if it.parsed]
+        return sum(confs) / len(confs) if confs else 0.0
+
+    @property
+    def has_conflict(self) -> bool:
+        from collections import defaultdict
+        video_eps = defaultdict(int)
+        for it in self.items:
+            if it.is_video and it.parsed and it.parsed.episode is not None and not it.ignored:
+                video_eps[it.parsed.episode] += 1
+        return any(count >= 2 for count in video_eps.values())
 
 
 # ---------------------------------------------------------------------------

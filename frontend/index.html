@@ -36,6 +36,14 @@
         <span class="nav-icon" aria-hidden="true">📋</span>
         <span>日志</span>
       </div>
+      <div class="nav-item" data-view="rules" id="nav-rules" role="button" tabindex="0" aria-label="Rules directories">
+        <span class="nav-icon" aria-hidden="true">📁</span>
+        <span>规则目录</span>
+      </div>
+      <div class="nav-item" data-view="ignored" id="nav-ignored" role="button" tabindex="0" aria-label="Ignored directories">
+        <span class="nav-icon" aria-hidden="true">🚫</span>
+        <span>已忽略</span>
+      </div>
     </nav>
 
     <div class="sidebar-footer">
@@ -100,8 +108,18 @@
         <div class="pending-cards-grid" id="pending-cards" role="list" aria-label="Pending rename queue">
           <!-- JS renders cards here -->
           <div class="empty-state">
-            <div class="empty-icon">⏳</div>
-            <p>加载中…</p>
+            <div class="empty-icon">✅</div>
+            <p>暂无需要手动确认的队列</p>
+          </div>
+        </div>
+
+        <!-- Auto queue -->
+        <div class="section-header" style="margin-top:32px;">
+          <h2 class="section-title">AUTO 订阅分类</h2>
+        </div>
+        <div class="auto-subscriptions-grid" id="auto-list" role="list" aria-label="Auto subscriptions">
+          <div class="empty-state">
+            <p style="font-size: 13px; color: var(--text-muted);">暂无开启 AUTO 模式的目录</p>
           </div>
         </div>
 
@@ -113,6 +131,53 @@
           <!-- JS renders here -->
         </div>
 
+      </section>
+
+      <!-- ════════════════ Rules View ════════════════ -->
+      <section class="view" id="view-rules" aria-label="Rules and Directories">
+        <div class="section-header">
+          <h2 class="section-title">规则目录与根文件夹</h2>
+        </div>
+        <div class="table-wrap">
+          <table role="table" aria-label="Rules directories table">
+            <thead>
+              <tr role="row">
+                <th role="columnheader">目录名称</th>
+                <th role="columnheader">相对路径</th>
+                <th role="columnheader">当前模式</th>
+                <th role="columnheader">配置类型</th>
+                <th role="columnheader">操作 (一键切换)</th>
+              </tr>
+            </thead>
+            <tbody id="rules-tbody">
+              <!-- JS Populated -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ════════════════ Ignored View ════════════════ -->
+      <section class="view" id="view-ignored" aria-label="Ignored directories">
+        <div class="section-header">
+          <h2 class="section-title">已忽略目录 (非动漫/无视频)</h2>
+        </div>
+        <div class="table-wrap">
+          <table role="table" aria-label="Ignored directories table">
+            <thead>
+              <tr>
+                <th scope="col">时间</th>
+                <th scope="col">原始目录</th>
+                <th scope="col">解析结果</th>
+                <th scope="col">忽略原因</th>
+                <th scope="col">置信度</th>
+                <th scope="col">文件数</th>
+              </tr>
+            </thead>
+            <tbody id="ignored-tbody">
+              <tr><td colspan="6" class="empty-table">加载中…</td></tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <!-- ════════════════ Series View ════════════════ -->
@@ -205,6 +270,35 @@
       <div class="modal-footer">
         <button class="btn btn-ghost" id="modal-cancel">取消</button>
         <button class="btn btn-accent" id="modal-save">✅ 保存并确认</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Preview Modal ────────────────────────────────────────────────────── -->
+  <div class="modal-overlay" id="preview-modal-overlay" role="dialog" aria-modal="true">
+    <div class="modal preview-modal" id="preview-modal">
+      <div class="modal-header">
+        <h2 class="modal-title">改名预览</h2>
+        <button class="modal-close-btn" id="preview-modal-close" aria-label="Close dialog">✕</button>
+      </div>
+      <div class="modal-body" id="preview-modal-body">
+        <!-- Content injected by JS -->
+      </div>
+    </div>
+  </div>
+  
+  <!-- ── Conflict Modal ───────────────────────────────────────────────────── -->
+  <div class="modal-overlay" id="conflict-modal-overlay" role="dialog" aria-modal="true">
+    <div class="modal" id="conflict-modal">
+      <div class="modal-header">
+        <h2 class="modal-title">解决多版本冲突</h2>
+        <button class="modal-close-btn" id="conflict-modal-close" aria-label="Close dialog">✕</button>
+      </div>
+      <div class="modal-body" id="conflict-modal-body" style="max-height: 400px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px;">
+        <!-- Content injected by JS -->
+      </div>
+      <div class="modal-footer" style="display:flex;justify-content:flex-end;">
+        <button class="btn btn-accent" onclick="document.getElementById('btn-refresh').click(); closeConflictModal();">完成并刷新</button>
       </div>
     </div>
   </div>

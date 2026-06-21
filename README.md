@@ -1,6 +1,77 @@
-# AnimeRenamer v2 — 开发计划
+# AnimeRenamer v2
 
 > 自动化动画整理系统：qBittorrent → 智能重命名 → NAS 存储 → Jellyfin 媒体库
+
+---
+
+## 🚀 开发快速启动
+
+### 环境依赖
+
+```bash
+pip install -r requirements.txt
+```
+
+### 第一步：重置测试沙盒（回滚为干净的测试数据）
+
+```bash
+# 清空并重建 regression_downloads 目录结构（模拟 Unraid 的 /mnt/user/hentaidisk/Downloads）
+# 同时清空 regression_target（模拟 /mnt/user/hentaidisk/video 的 anime 和 link 目录）
+python reset_env.py
+```
+
+> 源头是 `unriad.output`（从真实 Unraid 导出的目录树），脚本会 1:1 重建到 `regression_downloads/Downloads/`。
+
+### 第二步：启动后端服务
+
+```bash
+cd /workspaces/anime_triage
+uvicorn backend.main:app --host 0.0.0.0 --port 8765 --reload
+```
+
+服务启动后访问：**http://localhost:8765/**
+
+`--reload` 模式下，修改任意 Python 文件后后端会自动重载，无需手动重启。
+
+### 第三步：触发扫描（刷新队列）
+
+```bash
+curl -X POST http://localhost:8765/api/scan
+```
+
+或直接在 Web UI 右上角点击 **刷新** 图标。
+
+### 常用 API
+
+| 接口 | 方法 | 说明 |
+|------|------|------|
+| `/api/pending` | GET | 获取待处理队列 |
+| `/api/scan` | POST | 重新扫描下载目录 |
+| `/api/pending/{id}/confirm` | POST | 确认并执行整理 |
+| `/api/pending/{id}/skip` | POST | 跳过该条目 |
+| `/api/series` | GET/POST | 查看/添加番剧配置 |
+| `/api/recent` | GET | 最近处理记录 |
+
+### 配置文件
+
+`config/series_config.yaml` — 所有设置都在这里：
+
+```yaml
+settings:
+  tmdb_api_key: "your_key_here"
+  download_dir: "/workspaces/anime_triage/regression_downloads/Downloads"  # 开发环境
+  storage_dir: "/workspaces/anime_triage/regression_target/mnt/user/hentaidisk/video/anime"
+  jellyfin_airing_dir: "...video/link/Bangumi"
+  jellyfin_collect_dir: "...video/link/anime/动漫"
+
+series:
+  某科学的超电磁炮:
+    mode: confirm
+    tmdb_name: A Certain Scientific Railgun
+    season: 3
+    aliases:
+      - Toaru Kagaku no Railgun T
+```
 
 ---
 
