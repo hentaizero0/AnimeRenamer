@@ -1,0 +1,12 @@
+# Example config - copy to series_config.yaml and fill in your values
+settings:
+  default_mode: confirm
+  download_dir: /path/to/downloads
+  storage_dir: /path/to/storage
+  jellyfin_airing_dir: /path/to/jellyfin/airing
+  jellyfin_collect_dir: /path/to/jellyfin/collected
+  # TMDB API Key - set via environment variable: export TMDB_API_KEY=your_key
+  # Or hardcode below (but don't commit if you do!)
+  tmdb_api_key: ${TMDB_API_KEY}
+
+series: {}

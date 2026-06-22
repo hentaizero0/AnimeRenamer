@@ -59,3 +59,16 @@ docker-compose.override.yml
 # unriad.output is your personal NAS tree snapshot, not needed in repo
 unriad.output
 parse_tree.py
+# Config with secrets
+config/series_config.yaml
+config/*.local.*
+.env
+.env.local
+
+# State files
+state.json
+
+# Temp
+*.pyc
+__pycache__/
+.pytest_cache/
