@@ -2,7 +2,7 @@ import asyncio
 from typing import Any
 from datetime import datetime, timezone
 import json
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -673,7 +673,7 @@ async def get_settings() -> dict[str, Any]:
     return settings
 
 @app.post("/api/settings")
-async def update_settings(payload: dict[str, Any]) -> dict[str, str]:
+async def update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, str]:
     """Update settings (e.g., TMDB API key)"""
     settings = _load_settings()
     if "tmdb_api_key" in payload:
