@@ -57,7 +57,7 @@ docker-compose.override.yml
 
 # ── Misc dev artifacts ───────────────────────────────────
 # unriad.output is your personal NAS tree snapshot, not needed in repo
-unriad.output
+
 parse_tree.py
 # Config with secrets
 config/series_config.yaml
