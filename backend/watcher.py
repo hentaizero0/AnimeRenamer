@@ -12,8 +12,10 @@ from backend.tmdb import TmdbClient
 
 async def tmdb_async_resolve(job_id: str, search_title: str, dir_name: str, config):
     if not config.tmdb_api_key:
+        print(f"[TMDB] Skipping TMDB resolve for {job_id}: API key is empty")
         return
         
+    print(f"[TMDB] Resolving {job_id} with title='{search_title}', dir='{dir_name}'")
     client = TmdbClient(config.tmdb_api_key)
     
     # Try searching by parsed title first
@@ -39,7 +41,10 @@ async def tmdb_async_resolve(job_id: str, search_title: str, dir_name: str, conf
                     search_title = f"{search_title} (fallback: {clean_dir})"
             
     if not results:
+        print(f"[TMDB] No results found for '{search_title}'")
         return
+    
+    print(f"[TMDB] Found {len(results)} results for '{search_title}', best: {results[0].name} (confidence: {results[0].confidence:.2f})")
         
     best_match = results[0]
     # We only override if confidence is reasonably high

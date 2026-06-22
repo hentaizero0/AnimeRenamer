@@ -66,7 +66,12 @@ async def startup_event():
     if settings.get("tmdb_api_key"):
         import os
         os.environ["TMDB_API_KEY"] = settings["tmdb_api_key"]
-        print("[STARTUP] Loaded TMDB API key from settings")
+        print(f"[STARTUP] Loaded TMDB API key from settings: {settings['tmdb_api_key'][:10]}...")
+    else:
+        print("[STARTUP] No TMDB API key found in settings")
+    
+    # Check config's tmdb_api_key
+    print(f"[STARTUP] config.tmdb_api_key: {config.tmdb_api_key[:20] if config.tmdb_api_key else 'EMPTY'}...")
     
     loop = asyncio.get_running_loop()
     watcher_observer = start_watcher(loop)
