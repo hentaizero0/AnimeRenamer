@@ -44,6 +44,10 @@
         <span class="nav-icon" aria-hidden="true">🚫</span>
         <span>已忽略</span>
       </div>
+          <div class="nav-item" data-view="settings" id="nav-settings" role="button" tabindex="0" aria-label="Settings">
+        <span class="nav-icon" aria-hidden="true">⚙️</span>
+        <span>设置</span>
+      </div>
     </nav>
 
     <div class="sidebar-footer">
@@ -230,6 +234,27 @@
         </div>
 
       </section>
+      <!-- ════════════════ Settings View ════════════════ -->
+      <section class="view" id="view-settings" aria-label="Settings">
+        <div class="section-header">
+          <h2 class="section-title">⚙️ 设置</h2>
+        </div>
+        
+        <div class="card">
+          <div class="card-body">
+            <h3 style="margin-top:0">TMDB API 密钥</h3>
+            <p style="color:var(--text-muted);font-size:12px">用于查询番剧信息。从 <a href="https://www.themoviedb.org/settings/api" target="_blank">TMDB</a> 获取。</p>
+            
+            <div style="display:flex;gap:10px;margin-top:15px">
+              <input type="password" id="settings-tmdb-key" placeholder="粘贴你的 TMDB API key" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:4px;font-family:monospace;font-size:12px">
+              <button onclick="saveTmdbKey()" style="padding:8px 16px;background:var(--accent);color:white;border:none;border-radius:4px;cursor:pointer">保存</button>
+            </div>
+            
+            <div id="settings-status" style="margin-top:10px;font-size:12px;color:var(--text-muted)"></div>
+          </div>
+        </div>
+      </section>
+
 
     </div><!-- /content -->
   </main><!-- /main -->

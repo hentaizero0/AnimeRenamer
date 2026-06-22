@@ -96,6 +96,13 @@ const API = {
   },
   updateDirectoryMode: async (folder, mode) => {
     return await _post(`/directories/${encodeURIComponent(folder)}/mode`, { mode });
+  async getSettings() {
+    return (await _get('/settings')) ?? { tmdb_api_key: '' };
+  },
+  async updateSettings(data = {}) {
+    return (await _post('/settings', data)) ?? { status: 'ok' };
+  },
+
   },
   isOnline() { return _apiOnline === true; },
 };

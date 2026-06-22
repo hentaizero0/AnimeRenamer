@@ -788,3 +788,33 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Fade in after load
   document.body.classList.add('loaded');
 });
+
+
+// ── Settings ──────────────────────────────────────────────────────────────
+async function renderSettings() {
+  const settings = await API.getSettings();
+  document.getElementById('settings-tmdb-key').value = settings.tmdb_api_key || '';
+}
+
+async function saveTmdbKey() {
+  const key = document.getElementById('settings-tmdb-key').value;
+  if (!key || key.length < 10) {
+    showToast('API key 不能为空', 'error');
+    return;
+  }
+  
+  const status = document.getElementById('settings-status');
+  status.textContent = '保存中…';
+  
+  try {
+    await API.updateSettings({ tmdb_api_key: key });
+    status.textContent = '✓ 已保存';
+    status.style.color = 'var(--success, #4caf50)';
+    setTimeout(() => { status.textContent = ''; }, 3000);
+    showToast('TMDB API key 已保存', 'success');
+  } catch (e) {
+    status.textContent = '✗ 保存失败';
+    status.style.color = 'var(--error, #f44336)';
+    showToast('保存失败: ' + e.message, 'error');
+  }
+}
