@@ -558,7 +558,7 @@ async function renderSeries() {
   const countEl = document.getElementById('series-count');
   if (countEl) countEl.textContent = series.length;
   grid.innerHTML = series.map(s => `
-    <div class="series-card" data-id="${s.id}">
+    <div class="series-card" data-id="${s.name}">
       <div class="series-card-header">
         <div class="series-icon">${s.title.charAt(0)}</div>
         <div class="series-mode-wrap">${modeBadge(s.mode)}</div>

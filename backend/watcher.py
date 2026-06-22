@@ -224,7 +224,7 @@ def process_directory(dir_path: Path, config, series_db, strict: bool = False, d
     video_count = sum(1 for it in items if it.is_video)
     if not items or video_count == 0:
         return BatchTriageJob(
-            id=str(int(time.time() * 1000)),
+            id=str(uuid.uuid4().hex[:12]),
             source_dir=rel_dir,
             items=items,
             status=TriageStatus.ignored,
