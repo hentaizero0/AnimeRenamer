@@ -712,7 +712,7 @@ async function renderIgnored() {
 
 // ── API status indicator ──────────────────────────────────────────────────────
 async function updateApiStatus() {
-  const online = API.isOnline();
+  const online = await API.isOnline();
   const dot = document.getElementById('api-status-dot');
   const label = document.getElementById('api-status-label');
   if (online) {

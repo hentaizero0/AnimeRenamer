@@ -103,5 +103,14 @@ const API = {
   updateSettings: async (data = {}) => {
     return (await _post('/settings', data)) ?? { status: 'ok' };
   },
-  isOnline() { return _apiOnline === true; },
+  async isOnline() {
+    // Check both API availability and TMDB key configuration
+    if (!await _checkOnline()) return false;
+    try {
+      const settings = await this.getSettings();
+      return !!(settings && settings.tmdb_api_key);
+    } catch {
+      return false;
+    }
+  },
 };
