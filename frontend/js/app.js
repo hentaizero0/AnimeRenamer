@@ -712,15 +712,21 @@ async function renderIgnored() {
 
 // ── API status indicator ──────────────────────────────────────────────────────
 async function updateApiStatus() {
-  const online = await API.isOnline();
+  const { apiOnline, hasKey, tmdbValid } = await API.getConnectivityStatus();
   const dot = document.getElementById('api-status-dot');
   const label = document.getElementById('api-status-label');
-  if (online) {
+  if (!apiOnline) {
+    dot.style.background = 'var(--warning)';
+    label.textContent = 'Mock 模式';
+  } else if (!hasKey) {
+    dot.style.background = 'var(--warning)';
+    label.textContent = 'TMDB 未配置';
+  } else if (tmdbValid) {
     dot.style.background = 'var(--success)';
     label.textContent = 'API 在线';
   } else {
-    dot.style.background = 'var(--warning)';
-    label.textContent = 'Mock 模式';
+    dot.style.background = 'var(--error)';
+    label.textContent = 'TMDB Key 无效';
   }
 }
 
@@ -794,13 +800,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 // ── Settings ──────────────────────────────────────────────────────────────
 async function renderSettings() {
   const settings = await API.getSettings();
-  document.getElementById('settings-tmdb-key').value = settings.tmdb_api_key || '';
+  const input = document.getElementById('settings-tmdb-key');
+  input.value = '';
+  input.placeholder = settings.has_key
+    ? `已配置 ${settings.key_hint}，留空则不变`
+    : '输入 TMDB API key';
 }
 
 async function saveTmdbKey() {
-  const key = document.getElementById('settings-tmdb-key').value;
-  if (!key || key.length < 10) {
-    showToast('API key 不能为空', 'error');
+  const key = document.getElementById('settings-tmdb-key').value.trim();
+  if (!key) {
+    showToast('未修改 TMDB API key', 'success');
     return;
   }
   

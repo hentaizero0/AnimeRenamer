@@ -56,7 +56,7 @@ class SeriesDB:
                 
         series_dict = {}
         for title, s_conf in self._series.items():
-            series_dict[title] = s_conf.model_dump(exclude_unset=True)
+            series_dict[title] = s_conf.model_dump(exclude_none=True)
             
         data["series"] = series_dict
         
@@ -67,15 +67,19 @@ class SeriesDB:
     def get(self, title: str) -> SeriesConfig | None:
         return self._series.get(title)
 
-    def match_by_alias(self, raw_title: str) -> SeriesConfig | None:
+    def match_entry_by_alias(self, raw_title: str) -> tuple[str, SeriesConfig] | None:
         raw_lower = raw_title.lower()
         for title, s_conf in self._series.items():
             if title.lower() == raw_lower or s_conf.tmdb_name.lower() == raw_lower:
-                return s_conf
+                return title, s_conf
             for alias in s_conf.aliases:
                 if alias.lower() == raw_lower:
-                    return s_conf
+                    return title, s_conf
         return None
+
+    def match_by_alias(self, raw_title: str) -> SeriesConfig | None:
+        matched = self.match_entry_by_alias(raw_title)
+        return matched[1] if matched else None
 
     def add(self, series: SeriesConfig, title: str | None = None) -> None:
         key = title or series.tmdb_name

@@ -1,35 +1,29 @@
 import asyncio
 import time
+import logging
 from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+from backend.domain.constants import EXTRA_DIR_KEYWORDS, IGNORED_DIR_NAMES, SUBTITLE_SUFFIXES, VIDEO_SUFFIXES
+from backend.domain.mode import resolve_mode
 from backend.parser import parse_file, is_likely_anime
 from backend.models import BatchTriageJob, FileTriageItem, TriageStatus, SeriesConfig
 from backend.config import load_config, SeriesDB
 from backend.tmdb import TmdbClient
+from backend.services.queue_service import QueueService, default_queue_service
+
+logger = logging.getLogger(__name__)
 
 
-async def tmdb_async_resolve(job_id: str, search_title: str, dir_name: str, config):
-    # ponytail: Load API key from settings.json if config is empty or placeholder
-    api_key = config.tmdb_api_key
-    if not api_key or api_key.startswith('$'):
-        # Try loading from settings
-        from pathlib import Path
-        import json
-        settings_file = Path.home() / '.config' / 'anime_renamer' / 'settings.json'
-        if settings_file.exists():
-            try:
-                data = json.loads(settings_file.read_text())
-                api_key = data.get('tmdb_api_key', '')
-            except:
-                pass
-    
+async def tmdb_async_resolve(job_id: str, search_title: str, dir_name: str, config, queue_service: QueueService | None = None, key_resolver=None):
+    queue_state = queue_service or default_queue_service
+    api_key = key_resolver() if key_resolver else (config.tmdb_api_key or "")
     if not api_key:
-        print(f"[TMDB] Skipping TMDB resolve for {job_id}: API key is empty")
+        logger.info("[TMDB] Skipping TMDB resolve for %s: API key is empty", job_id)
         return
         
-    print(f"[TMDB] Resolving {job_id} with title='{search_title}', dir='{dir_name}'")
+    logger.info("[TMDB] Resolving %s with title='%s', dir='%s'", job_id, search_title, dir_name)
     client = TmdbClient(api_key)
     
     # Try searching by parsed title first
@@ -55,18 +49,16 @@ async def tmdb_async_resolve(job_id: str, search_title: str, dir_name: str, conf
                     search_title = f"{search_title} (fallback: {clean_dir})"
             
     if not results:
-        print(f"[TMDB] No results found for '{search_title}'")
+        logger.info("[TMDB] No results found for '%s'", search_title)
         return
     
-    print(f"[TMDB] Found {len(results)} results for '{search_title}', best: {results[0].name} (confidence: {results[0].confidence:.2f})")
+    logger.info("[TMDB] Found %s results for '%s', best: %s (confidence: %.2f)", len(results), search_title, results[0].name, results[0].confidence)
         
     best_match = results[0]
     # We only override if confidence is reasonably high
     if best_match.confidence > 0.6:
-        # Update the job in the queue
-        import backend.main as main_api
-        if job_id in main_api.queue:
-            job = main_api.queue[job_id]
+        job = queue_state.get(job_id)
+        if job is not None:
             # Create a virtual SeriesConfig for it
             sc = SeriesConfig(
                 mode=job.default_mode or "confirm",
@@ -76,7 +68,7 @@ async def tmdb_async_resolve(job_id: str, search_title: str, dir_name: str, conf
             )
             job.series_config = sc
             job.override_title = best_match.name
-            print(f"[TMDB] Resolved '{search_title}' -> '{best_match.name}'")
+            logger.info("[TMDB] Resolved '%s' -> '%s'", search_title, best_match.name)
 
 def get_local_config(dir_path: Path) -> dict | None:
     # Try reading configuration from local files:
@@ -93,7 +85,7 @@ def get_local_config(dir_path: Path) -> dict | None:
                     with open(p, "r", encoding="utf-8") as f:
                         return yaml.safe_load(f)
             except Exception as e:
-                print(f"Error loading local config {p}: {e}")
+                logger.warning("Error loading local config %s: %s", p, e)
     return None
 
 def is_download_root(dir_path: Path) -> bool:
@@ -127,7 +119,7 @@ def resolve_anime_dir_and_mode(path: Path, download_dir: Path) -> tuple[Path, st
     def get_anime_root_from_index(idx: int, mode: str) -> tuple[Path, str] | None:
         if idx < len(parts):
             curr = parts[idx]
-            has_direct_media = any(f.is_file() and f.suffix.lower() in [".mp4", ".mkv", ".avi", ".rmvb", ".ts"] for f in curr.iterdir())
+            has_direct_media = any(f.is_file() and f.suffix.lower() in VIDEO_SUFFIXES for f in curr.iterdir())
             has_subdirs = any(f.is_dir() for f in curr.iterdir())
             has_season_folders = any(f.is_dir() and "season" in f.name.lower() for f in curr.iterdir())
             
@@ -168,27 +160,25 @@ def find_all_anime_dirs(download_dir: Path) -> list[tuple[Path, str]]:
             if not child.is_dir():
                 continue
                 
-            allowed_extras = {"sp", "bonus", "extras", "nced", "ncop", "menu", "featurettes", "ova", "oad", "scans", "pv", "op", "ed"}
             child_name_lower = child.name.lower()
-            if "season" in child_name_lower or any(e in child_name_lower for e in allowed_extras) or child_name_lower in ["autolinklog", "logs", "log"]:
+            if "season" in child_name_lower or any(e in child_name_lower for e in EXTRA_DIR_KEYWORDS) or child_name_lower in IGNORED_DIR_NAMES:
                 continue
             
             if is_download_root(child):
                 traverse(child, mode)
                 continue
             
-            has_direct_media = any(f.is_file() and f.suffix.lower() in [".mp4", ".mkv", ".avi", ".rmvb", ".ts"] for f in child.iterdir())
+            has_direct_media = any(f.is_file() and f.suffix.lower() in VIDEO_SUFFIXES for f in child.iterdir())
             has_subdirs = any(f.is_dir() for f in child.iterdir())
             
-            allowed_extras = {"sp", "bonus", "extras", "nced", "ncop", "menu", "featurettes", "ova", "oad", "scans", "pv", "op", "ed"}
-            has_season_folders = any(f.is_dir() and ("season" in f.name.lower() or f.name.lower() in allowed_extras) for f in child.iterdir())
+            has_season_folders = any(f.is_dir() and ("season" in f.name.lower() or f.name.lower() in EXTRA_DIR_KEYWORDS) for f in child.iterdir())
             
             if has_direct_media or has_season_folders:
                 results.append((child, mode or "confirm"))
                 
             if has_subdirs:
                 # Always traverse into subdirectories that aren't season/extras, because they might be independent anime dirs (like Bangumi/Dandadan)
-                if child.name.lower() not in ["autolinklog", "logs", "log"]:
+                if child.name.lower() not in IGNORED_DIR_NAMES:
                     traverse(child, mode)
         return
 
@@ -204,21 +194,19 @@ def process_directory(dir_path: Path, config, series_db, strict: bool = False, d
     except ValueError:
         return None
         
-    allowed_extras = {"sp", "bonus", "extras", "nced", "ncop", "menu", "featurettes", "ova", "oad", "scans", "pv", "op", "ed"}
-    
     files_to_process = []
     for f in dir_path.iterdir():
         if f.is_file():
             files_to_process.append(f)
         elif f.is_dir():
             name_lower = f.name.lower()
-            if "season" in name_lower or name_lower in allowed_extras:
+            if "season" in name_lower or name_lower in EXTRA_DIR_KEYWORDS:
                 files_to_process.extend(f.rglob("*"))
                 
     for f in files_to_process:
         if f.is_file():
-            is_video = f.suffix.lower() in [".mkv", ".mp4", ".avi", ".ts"]
-            is_sub = f.suffix.lower() in [".ass", ".srt"]
+            is_video = f.suffix.lower() in VIDEO_SUFFIXES
+            is_sub = f.suffix.lower() in SUBTITLE_SUFFIXES
             
             if not is_video and not is_sub:
                 continue
@@ -243,7 +231,7 @@ def process_directory(dir_path: Path, config, series_db, strict: bool = False, d
     video_count = sum(1 for it in items if it.is_video)
     if not items or video_count == 0:
         return BatchTriageJob(
-            id=str(uuid.uuid4().hex[:12]),
+            id=str(int(time.time() * 1000)),
             source_dir=rel_dir,
             items=items,
             status=TriageStatus.ignored,
@@ -261,12 +249,14 @@ def process_directory(dir_path: Path, config, series_db, strict: bool = False, d
     )
     
     # Try to find series config
-    s_conf = None
+    matched_entry = None
     if job.effective_title:
-        s_conf = series_db.match_by_alias(job.effective_title)
+        matched_entry = series_db.match_entry_by_alias(job.effective_title)
         
-    if s_conf:
+    if matched_entry:
+        matched_title, s_conf = matched_entry
         job.series_config = s_conf
+        job.override_title = matched_title
         
     if strict and job.confidence < 0.85:
         job.status = TriageStatus.ignored
@@ -276,11 +266,14 @@ def process_directory(dir_path: Path, config, series_db, strict: bool = False, d
     return job
 
 class DownloadDirHandler(FileSystemEventHandler):
-    def __init__(self, config, series_db, loop):
+    def __init__(self, config, series_db, loop, queue_service: QueueService | None = None, key_resolver=None, persist_state=None):
         self.config = config
         self.series_db = series_db
         self.loop = loop
         self.processed_dirs = set()
+        self.queue_service = queue_service or default_queue_service
+        self.key_resolver = key_resolver
+        self.persist_state = persist_state
 
     def process_dir_event(self, dir_path: Path, strict: bool = False):
         download_dir = Path(self.config.download_dir)
@@ -301,12 +294,7 @@ class DownloadDirHandler(FileSystemEventHandler):
         if not job:
             return
             
-        import backend.main as main_api
-        existing_job = None
-        for j in main_api.queue.values():
-            if j.source_dir == rel_dir and j.status in (TriageStatus.pending, TriageStatus.ignored):
-                existing_job = j
-                break
+        existing_job = self.queue_service.find_active_by_source_dir(rel_dir)
                 
         if existing_job:
             job.id = existing_job.id # Keep the same ID
@@ -321,42 +309,43 @@ class DownloadDirHandler(FileSystemEventHandler):
                 if it.relative_path in existing_ignores:
                     it.ignored = existing_ignores[it.relative_path]
             
-        main_api.queue[job.id] = job
+        self.queue_service.put(job)
         
-        mode = job.series_config.mode if job.series_config else job.default_mode
-        # If there's a conflict, force the mode to confirm so the user can manually resolve it
-        if mode == "auto" and job.has_conflict:
-            mode = "confirm"
+        mode = resolve_mode(job, self.config)
             
         if mode == "auto" and job.status == TriageStatus.pending:
-            self.loop.create_task(self._tmdb_then_auto(job, main_api))
+            self.loop.create_task(self._tmdb_then_auto(job))
         elif not job.series_config and job.effective_title:
             try:
                 dir_name = Path(job.source_dir).name
-                self.loop.create_task(tmdb_async_resolve(job.id, job.effective_title, dir_name, self.config))
+                self.loop.create_task(tmdb_async_resolve(job.id, job.effective_title, dir_name, self.config, self.queue_service, self.key_resolver))
             except Exception as e:
-                print(f"Failed to dispatch TMDB task: {e}")
+                logger.warning("Failed to dispatch TMDB task: %s", e)
 
-    async def _tmdb_then_auto(self, job, main_api):
-        import time
-        from backend.models import TriageStatus
+    async def _tmdb_then_auto(self, job):
         if not job.series_config and job.effective_title:
             dir_name = Path(job.source_dir).name
-            await tmdb_async_resolve(job.id, job.effective_title, dir_name, self.config)
-        
+            await tmdb_async_resolve(job.id, job.effective_title, dir_name, self.config, self.queue_service, self.key_resolver)
+
+        current_job = self.queue_service.get(job.id) or job
         from backend.triage import execute_triage_job
-        res = await execute_triage_job(job, self.config)
-        
-        main_api.history.insert(0, {
-            "job_id": job.id,
-            "result": res,
-            "title": job.effective_title,
-        })
+
+        res = await execute_triage_job(current_job, self.config)
+
+        self.queue_service.append_history(
+            current_job.id,
+            res,
+            current_job.effective_title,
+            mode=resolve_mode(current_job, self.config),
+            confidence=current_job.confidence,
+        )
         if res.success:
-            job.status = TriageStatus.done
+            current_job.status = TriageStatus.done
         else:
-            job.status = TriageStatus.error
-            job.error_message = res.error_msg
+            current_job.status = TriageStatus.error
+            current_job.error_message = res.error_msg
+        if self.persist_state:
+            self.persist_state()
 
     def on_created(self, event):
         if not event.is_directory:
@@ -366,13 +355,13 @@ class DownloadDirHandler(FileSystemEventHandler):
         if not event.is_directory:
             self.loop.call_soon_threadsafe(self.process_dir_event, Path(event.dest_path).parent)
 
-def start_watcher(loop: asyncio.AbstractEventLoop):
+def start_watcher(loop: asyncio.AbstractEventLoop, queue_service: QueueService | None = None, key_resolver=None, persist_state=None):
     config = load_config("config/series_config.yaml")
     series_db = SeriesDB("config/series_config.yaml")
     download_dir = Path(config.download_dir)
     download_dir.mkdir(parents=True, exist_ok=True)
     
-    event_handler = DownloadDirHandler(config, series_db, loop)
+    event_handler = DownloadDirHandler(config, series_db, loop, queue_service=queue_service, key_resolver=key_resolver, persist_state=persist_state)
     observer = Observer()
     observer.schedule(event_handler, str(download_dir), recursive=True)
     observer.start()

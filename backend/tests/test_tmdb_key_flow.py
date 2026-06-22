@@ -125,6 +125,32 @@ class TestGetSettingsContract:
         assert body["has_key"] is False
 
 
+class TestValidateSettingsContract:
+    def test_validate_false_when_missing_key(self, client):
+        body = client.get("/api/settings/validate").json()
+        assert body == {"has_key": False, "valid": False}
+
+    def test_validate_reports_invalid_key(self, client, settings_file, monkeypatch):
+        _write_settings(settings_file, REAL_KEY)
+
+        async def fake_validate(self):
+            return False
+
+        monkeypatch.setattr(main.TmdbClient, "validate_key", fake_validate)
+        body = client.get("/api/settings/validate").json()
+        assert body == {"has_key": True, "valid": False}
+
+    def test_validate_reports_valid_key(self, client, settings_file, monkeypatch):
+        _write_settings(settings_file, REAL_KEY)
+
+        async def fake_validate(self):
+            return True
+
+        monkeypatch.setattr(main.TmdbClient, "validate_key", fake_validate)
+        body = client.get("/api/settings/validate").json()
+        assert body == {"has_key": True, "valid": True}
+
+
 # ===========================================================================
 # POST 契约：防空覆盖 / 防掩码 / 防占位符
 # ===========================================================================

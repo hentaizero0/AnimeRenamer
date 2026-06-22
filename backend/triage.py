@@ -1,183 +1,62 @@
-import os
 import shutil
 from pathlib import Path
+import logging
+
+from backend.adapters.fs import create_hardlink, rename_and_move, rollback_moves
+from backend.domain.mode import resolve_link_dir, resolve_mode
+from backend.domain.naming import build_video_stems_by_episode, compute_target_plan
 from backend.models import BatchTriageJob, TriageResult, TriageStatus
 from backend.config import AppConfig
 
-def rename_and_move(
-    source: Path,
-    target: Path,
-    dry_run: bool = False,
-) -> TriageResult:
-    if not source.exists() and not dry_run:
-        return TriageResult(success=False, source_path=str(source), error_msg=f"Source does not exist: {source}")
-        
-    if target.exists() and not dry_run:
-        try:
-            if source.resolve() == target.resolve():
-                return TriageResult(success=True, source_path=str(source), dest_path=str(target))
-        except Exception:
-            pass
-        return TriageResult(success=False, source_path=str(source), dest_path=str(target), error_msg="Target already exists")
-
-    if not dry_run:
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(source), str(target))
-            return TriageResult(success=True, source_path=str(source), dest_path=str(target))
-        except Exception as e:
-            return TriageResult(success=False, source_path=str(source), dest_path=str(target), error_msg=str(e))
-    else:
-        return TriageResult(success=True, source_path=str(source), dest_path=str(target))
-
-def create_hardlink(
-    source: Path,
-    link_target: Path,
-    dry_run: bool = False,
-) -> TriageResult:
-    if not source.exists() and not dry_run:
-        return TriageResult(success=False, source_path=str(source), dest_path=str(source), error_msg="Source does not exist")
-        
-    if link_target.exists() and not dry_run:
-        if source.stat().st_ino == link_target.stat().st_ino:
-            return TriageResult(success=True, source_path=str(source), hardlink_path=str(link_target))
-        return TriageResult(success=False, source_path=str(source), hardlink_path=str(link_target), error_msg="Link target exists and is a different file")
-
-    if not dry_run:
-        try:
-            link_target.parent.mkdir(parents=True, exist_ok=True)
-            os.link(source, link_target)
-            return TriageResult(success=True, source_path=str(source), hardlink_path=str(link_target))
-        except Exception as e:
-            return TriageResult(success=False, source_path=str(source), hardlink_path=str(link_target), error_msg=str(e))
-    else:
-        return TriageResult(success=True, source_path=str(source), hardlink_path=str(link_target))
+logger = logging.getLogger(__name__)
 
 async def execute_triage_job(
     job: BatchTriageJob,
     config: AppConfig,
     dry_run: bool = False,
 ) -> TriageResult:
-    anime_name = job.effective_title
-    season = job.effective_season
-    
     download_dir = Path(config.download_dir)
     storage_dir = Path(config.storage_dir)
-    
-    mode = "confirm"
-    if job.series_config and job.series_config.mode:
-        mode = job.series_config.mode
-    elif job.default_mode:
-        mode = job.default_mode
-    else:
-        mode = config.default_mode
-        
-    if mode == "auto":
-        link_dir = Path(config.jellyfin_airing_dir) if config.jellyfin_airing_dir else None
-    else:
-        link_dir = Path(config.jellyfin_collect_dir) if config.jellyfin_collect_dir else None
+    anime_name = job.effective_title
+    season = job.effective_season
+    mode = resolve_mode(job, config)
+    link_dir = resolve_link_dir(job, config, mode)
     
     overall_success = True
     error_msg = None
-    
-    # Pre-calculate video stems for each episode so subtitles can inherit the complex extension
-    from collections import defaultdict
-    video_stems_by_ep: dict[int, list[str]] = defaultdict(list)
-    for it in job.items:
-        if it.ignored:
-            continue
-        if it.is_video and it.parsed and it.parsed.episode is not None:
-            src = download_dir / it.relative_path
-            if src.exists():
-                video_stems_by_ep[it.parsed.episode].append(src.stem)
+    executed_moves: list[tuple[Path, Path]] = []
+    video_stems_by_ep = build_video_stems_by_episode(job, download_dir)
 
-    # Process videos and matched subtitles
     for it in job.items:
         if it.ignored:
             continue
-            
-        source_file = download_dir / it.relative_path
+
+        plan = compute_target_plan(job, it, config, video_stems_by_ep, mode, link_dir)
+        source_file = plan.source_file
         if not source_file.exists():
             continue
-            
-        ext = "".join(source_file.suffixes)
-        episode = it.parsed.episode if it.parsed else None
-        
-        # Determine target path
-        if episode is not None:
-            # We have a clear episode number
-            season_str = f"{season:02d}"
-            episode_str = f"{episode:02d}"
-            target_stem = f"{anime_name} S{season_str}E{episode_str}"
-            
-            target_filename = None
-            for v_stem in video_stems_by_ep.get(episode, []):
-                if source_file.name.startswith(v_stem):
-                    target_filename = source_file.name.replace(v_stem, target_stem, 1)
-                    break
-                    
-            if not target_filename:
-                target_filename = f"{target_stem}{ext}"
-                
-            if mode == "auto":
-                target_file = source_file.parent / target_filename
-            else:
-                target_file = storage_dir / anime_name / f"Season {season_str}" / target_filename
-            
-            res = rename_and_move(source_file, target_file, dry_run)
+        if plan.target_file != source_file:
+            res = rename_and_move(source_file, plan.target_file, dry_run)
             if res.success and not dry_run:
-                executed_moves.append((source_file, target_file))
+                executed_moves.append((source_file, plan.target_file))
             if not res.success:
                 overall_success = False
                 error_msg = res.error_msg
-                # ponytail: rollback on failure
-                for src, dst in reversed(executed_moves):
-                    try:
-                        shutil.move(str(dst), str(src))
-                    except Exception as e:
-                        print(f"[ROLLBACK] Failed to rollback {dst} to {src}: {e}")
+                rollback_moves(executed_moves)
                 break
-                
-            # Hardlink if it's a video or subtitle (ponytail: unified Season structure)
-            if link_dir and (it.is_video or source_file.suffix.lower() in [".ass", ".srt", ".ssa"]):
-                season_str = f"{season:02d}"
-                link_target = link_dir / anime_name / f"Season {season_str}" / target_filename
-                link_res = create_hardlink(target_file, link_target, dry_run)
-                if not link_res.success:
-                    overall_success = False
-                    error_msg = f"Hardlink failed: {link_res.error_msg}"
-                    break
-                
-        else:
-            # No episode detected, it might be a movie or an extra
-            if job.source_dir != ".":
-                try:
-                    rel_to_anime = source_file.relative_to(download_dir / job.source_dir)
-                except ValueError:
-                    rel_to_anime = Path(source_file.name)
-            else:
-                rel_to_anime = Path(source_file.name)
-                
-            season_str = f"{season:02d}"
-                
-            if mode == "auto":
-                target_file = source_file
-            else:
-                target_file = storage_dir / anime_name / f"Season {season_str}" / rel_to_anime
-                res = rename_and_move(source_file, target_file, dry_run)
-            if res.success and not dry_run:
-                executed_moves.append((source_file, target_file))
-                if not res.success:
-                    overall_success = False
-                    error_msg = res.error_msg
-                    break
-            
-            # The user explicitly requested: DO NOT hardlink extras to Jellyfin/link_dir
-            # even if they are placed in Season XX.
-            pass
+
+        if plan.link_target:
+            if plan.link_target.exists() and not dry_run:
+                plan.link_target.unlink()
+            link_source = plan.target_file if plan.target_file.exists() or dry_run else source_file
+            link_res = create_hardlink(link_source, plan.link_target, dry_run)
+            if not link_res.success:
+                overall_success = False
+                error_msg = f"Hardlink failed: {link_res.error_msg}"
+                break
             
     # Cleanup only in confirm mode
-    if mode != "auto":
+    if mode != "auto" and overall_success:
         source_dir_path = download_dir / job.source_dir
         if source_dir_path.exists() and source_dir_path.is_dir() and job.source_dir != ".":
             for child in source_dir_path.rglob("*"):
@@ -193,8 +72,8 @@ async def execute_triage_job(
             
             try:
                 shutil.rmtree(source_dir_path)
-            except:
-                pass
+            except Exception:
+                logger.debug("Failed to remove source dir %s", source_dir_path, exc_info=True)
 
     return TriageResult(
         success=overall_success, 

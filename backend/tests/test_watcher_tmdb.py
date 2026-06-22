@@ -5,8 +5,15 @@ from unittest.mock import AsyncMock, MagicMock
 from backend.tmdb import TmdbClient, TmdbMatch
 from backend.watcher import tmdb_async_resolve, process_directory, DownloadDirHandler, start_watcher
 from backend.config import AppConfig, SeriesDB
-from backend.models import BatchTriageJob, FileTriageItem, ParsedAnime, TriageStatus
+from backend.models import BatchTriageJob, FileTriageItem, ParsedAnime, SeriesConfig, TriageResult, TriageStatus
+from backend.services.queue_service import QueueService
 import backend.main as main_api
+
+
+class ClosingLoop:
+    def create_task(self, coro):
+        coro.close()
+        return None
 
 @pytest.fixture
 def clean_queue():
@@ -77,6 +84,47 @@ async def test_tmdb_client_search_and_verify(monkeypatch):
     # Run verify episode
     ok = await client.verify_episode(100, 1, 1)
     assert ok is True
+    await TmdbClient.aclose_all()
+
+@pytest.mark.asyncio
+async def test_tmdb_client_reuses_shared_async_client(monkeypatch):
+    class FakeResponse:
+        def __init__(self):
+            self.status_code = 200
+
+        def json(self):
+            return {"results": []}
+
+        def raise_for_status(self):
+            return None
+
+    class FakeAsyncClient:
+        instances = 0
+        closed = 0
+
+        def __init__(self):
+            FakeAsyncClient.instances += 1
+
+        async def get(self, *args, **kwargs):
+            return FakeResponse()
+
+        async def aclose(self):
+            FakeAsyncClient.closed += 1
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    first = TmdbClient(api_key="test_key")
+    second = TmdbClient(api_key="test_key")
+
+    await first.validate_key()
+    await second.validate_key()
+
+    assert FakeAsyncClient.instances == 1
+
+    await TmdbClient.aclose_all()
+    assert FakeAsyncClient.closed == 1
 
 @pytest.mark.asyncio
 async def test_tmdb_async_resolve(monkeypatch, clean_queue):
@@ -117,6 +165,68 @@ async def test_tmdb_async_resolve(monkeypatch, clean_queue):
     assert updated_job.series_config is not None
     assert updated_job.series_config.tmdb_name == "葬送的芙莉莲"
 
+@pytest.mark.asyncio
+async def test_tmdb_then_auto_uses_latest_queued_job(monkeypatch, tmp_path):
+    config = AppConfig(
+        download_dir=str(tmp_path / "downloads"),
+        storage_dir=str(tmp_path / "storage"),
+        tmdb_api_key="test_key",
+        default_mode="auto",
+    )
+    queue_service = QueueService()
+    series_db = SeriesDB(str(tmp_path / "series.yaml"))
+    handler = DownloadDirHandler(config, series_db, MagicMock(), queue_service=queue_service)
+
+    job = BatchTriageJob(
+        id="job123",
+        source_dir="Bangumi/Dandadan",
+        items=[
+            FileTriageItem(
+                relative_path="Bangumi/Dandadan/Dandadan - 01.mkv",
+                is_video=True,
+                parsed=ParsedAnime(
+                    raw_filename="Dandadan - 01.mkv",
+                    detected_title="Dandadan",
+                    season=1,
+                    episode=1,
+                    extension="mkv",
+                    confidence=0.9,
+                ),
+            )
+        ],
+        status=TriageStatus.pending,
+        default_mode="auto",
+    )
+    queue_service.put(job)
+
+    async def mock_tmdb_then_replace(*args, **kwargs):
+        queue_service.put(
+            BatchTriageJob(
+                id="job123",
+                source_dir=job.source_dir,
+                items=job.items,
+                status=TriageStatus.pending,
+                default_mode="auto",
+                override_title="胆大党",
+                series_config=SeriesConfig(mode="auto", tmdb_name="胆大党", season=1),
+            )
+        )
+
+    seen = {}
+
+    async def mock_execute_triage_job(executed_job, cfg):
+        seen["title"] = executed_job.effective_title
+        return TriageResult(success=True, source_path="", dest_path="", hardlink_path=None, error_msg=None, rollback_info={})
+
+    monkeypatch.setattr("backend.watcher.tmdb_async_resolve", mock_tmdb_then_replace)
+    monkeypatch.setattr("backend.triage.execute_triage_job", mock_execute_triage_job)
+
+    await handler._tmdb_then_auto(job)
+
+    assert seen["title"] == "胆大党"
+    assert queue_service.history[0]["title"] == "胆大党"
+    assert queue_service.get("job123").status == TriageStatus.done
+
 def test_process_directory(tmp_path):
     download_dir = tmp_path / "downloads"
     download_dir.mkdir()
@@ -140,6 +250,37 @@ def test_process_directory(tmp_path):
     assert len(job.items) == 2
     assert any(it.is_video for it in job.items)
 
+def test_process_directory_prefers_series_entry_title(tmp_path):
+    download_dir = tmp_path / "downloads"
+    download_dir.mkdir()
+
+    anime_dir = download_dir / "Frieren"
+    anime_dir.mkdir()
+    (anime_dir / "Frieren - 01.mkv").write_text("video")
+
+    config = AppConfig(
+        download_dir=str(download_dir),
+        storage_dir=str(tmp_path / "storage"),
+        default_mode="auto"
+    )
+    series_db = SeriesDB(str(tmp_path / "series.yaml"))
+    series_db.add(
+        SeriesConfig(
+            mode="auto",
+            tmdb_name="Frieren: Beyond Journey's End",
+            season=1,
+            aliases=["Frieren"],
+        ),
+        title="葬送的芙莉莲",
+    )
+
+    job = process_directory(anime_dir, config, series_db, strict=False)
+    assert job is not None
+    assert job.series_config is not None
+    assert job.series_config.tmdb_name == "Frieren: Beyond Journey's End"
+    assert job.override_title == "葬送的芙莉莲"
+    assert job.effective_title == "葬送的芙莉莲"
+
 def test_watcher_handlers(tmp_path, clean_queue):
     download_dir = tmp_path / "downloads"
     download_dir.mkdir()
@@ -151,7 +292,7 @@ def test_watcher_handlers(tmp_path, clean_queue):
     )
     series_db = SeriesDB(str(tmp_path / "series.yaml"))
     
-    loop = MagicMock()
+    loop = ClosingLoop()
     handler = DownloadDirHandler(config, series_db, loop)
     
     # Trigger event on folder

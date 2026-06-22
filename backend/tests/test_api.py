@@ -45,6 +45,18 @@ def test_get_stats_with_history_error(client):
     assert data["today"] == 1
     assert data["errors"] == 1
 
+def test_get_stats_with_stringified_history_result(client):
+    history.append({
+        "job_id": "job1",
+        "result": "success=True source_path='' dest_path='' hardlink_path=None error_msg=None rollback_info={}",
+        "title": "Test Title"
+    })
+    response = client.get("/api/stats")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["today"] == 1
+    assert data["errors"] == 0
+
 def test_get_pending_empty(client):
     response = client.get("/api/pending")
     assert response.status_code == 200
@@ -470,4 +482,3 @@ def test_update_directory_mode(client, tmp_path):
         
     finally:
         main_config.download_dir = old_download_dir
-

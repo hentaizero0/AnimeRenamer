@@ -156,6 +156,23 @@ async def test_8_confirm_mode_sub_hardlink(setup_triage_dirs):
     assert (col / "Anime G" / "Season 01" / "Anime G S01E02.ass").exists()
 
 @pytest.mark.asyncio
+async def test_8b_confirm_mode_extras_stay_in_season_without_hardlink(setup_triage_dirs):
+    config, dl, st, air, col = setup_triage_dirs
+    (dl / "Anime G" / "NCOP").mkdir(parents=True)
+    (dl / "Anime G" / "NCOP" / "creditless.mkv").write_text("v")
+
+    job = BatchTriageJob(
+        id="j8b",
+        source_dir="Anime G",
+        default_mode="confirm",
+        items=[FileTriageItem(relative_path="Anime G/NCOP/creditless.mkv", parsed=None, is_video=True)],
+    )
+
+    await execute_triage_job(job, config)
+    assert (st / "Anime G" / "Season 01" / "NCOP" / "creditless.mkv").exists()
+    assert not (col / "Anime G" / "Season 01" / "NCOP" / "creditless.mkv").exists()
+
+@pytest.mark.asyncio
 async def test_9_auto_mode_without_episode(setup_triage_dirs):
     config, dl, st, air, col = setup_triage_dirs
     (dl / "Anime H").mkdir()
@@ -311,4 +328,3 @@ def test_19_update_mode_path_traversal(mock_main_dirs):
 def test_20_update_mode_404(mock_main_dirs):
     res = client.post("/api/directories/Nonexistent/mode", json={"mode": "auto"})
     assert res.status_code == 404
-

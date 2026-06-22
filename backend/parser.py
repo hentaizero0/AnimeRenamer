@@ -23,18 +23,13 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
 
+from backend.domain.constants import VIDEO_EXTENSIONS
 from backend.models import ParsedAnime
 
 # ---------------------------------------------------------------------------
 # Constants / compiled regexes
 # ---------------------------------------------------------------------------
-
-# Known video extensions
-_VIDEO_EXTS: frozenset[str] = frozenset(
-    {"mkv", "mp4", "avi", "mov", "wmv", "flv", "m4v", "ts", "webm"}
-)
 
 # Tags that should be stripped from the title / remaining string.
 # Order matters: more-specific patterns first.
@@ -129,12 +124,6 @@ _EXPLICIT_SEASON_RE = re.compile(
 # SxxExx format: S02E01
 _SXEXX_RE = re.compile(r"\bS(\d{1,2})E(\d{1,4})\b", re.IGNORECASE)
 
-# Trailing title digit: "KonoSuba 3 - 01" → season 3
-# (used only when no other season found and digit precedes separator)
-_TRAILING_TITLE_DIGIT_RE = re.compile(
-    r"(?<!\d)(\d)\s*(?:-\s*\d|$)"
-)
-
 # ---------- Episode patterns ----------
 
 # Dash separator: " - 03" or " - 003"
@@ -157,20 +146,6 @@ _LEADING_TRAILING_DASH_RE = re.compile(r"^\s*[-–—]+\s*|\s*[-–—]+\s*$")
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class _ParseState:
-    """Mutable working state collected during parsing."""
-
-    raw: str
-    stem: str = ""           # filename without extension
-    ext: str = ""
-    fansub_group: str | None = None
-    season: int | None = None
-    episode: int | None = None
-    title_candidate: str = ""
-    flags: set[str] = field(default_factory=set)  # debug / confidence flags
 
 
 def _extract_extension(filename: str) -> tuple[str, str]:
@@ -448,7 +423,7 @@ def parse_file(filename: str, torrent_name: str | None = None) -> ParsedAnime:
     # Work only on the basename
     filename = os.path.basename(filename)
     stem, ext = _extract_extension(filename)
-    ext_known = ext in _VIDEO_EXTS
+    ext_known = ext in VIDEO_EXTENSIONS
 
     # --- If bare numeric stem, use torrent_name as the source ---
     if re.fullmatch(r"\d+", stem.strip()):
@@ -499,7 +474,7 @@ def _parse_stem(stem: str, ext: str) -> ParsedAnime:  # noqa: C901 (complexity O
     Returns a ParsedAnime with raw_filename == stem for internal use;
     the caller sets the real raw_filename.
     """
-    ext_known = ext in _VIDEO_EXTS
+    ext_known = ext in VIDEO_EXTENSIONS
     working = stem
 
     # 1. Strip Chinese month-new-season prefix (★04月新番)
