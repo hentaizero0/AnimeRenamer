@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 import httpx
 from rapidfuzz import fuzz
 
@@ -13,6 +13,8 @@ class TmdbMatch:
     matched_season: int | None = None
 
 class TmdbClient:
+    _shared_clients: ClassVar[dict[tuple[str, tuple[tuple[str, str], ...]], httpx.AsyncClient]] = {}
+
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.base_url = "https://api.themoviedb.org/3"
@@ -27,16 +29,50 @@ class TmdbClient:
         else:
             self.params = {}
 
-    async def search_anime(self, title: str, season: int | None = None) -> list[TmdbMatch]:
+    def _client_key(self) -> tuple[str, tuple[tuple[str, str], ...]]:
+        return self.api_key, tuple(sorted(self.headers.items()))
+
+    def _get_client(self) -> httpx.AsyncClient:
+        key = self._client_key()
+        client = self._shared_clients.get(key)
+        if client is None:
+            client = httpx.AsyncClient()
+            self._shared_clients[key] = client
+        return client
+
+    @classmethod
+    async def aclose_all(cls) -> None:
+        for client in cls._shared_clients.values():
+            await client.aclose()
+        cls._shared_clients.clear()
+
+    async def search_anime(self, title: str) -> list[TmdbMatch]:
         if not self.api_key:
             return []
-            
-        async with httpx.AsyncClient() as client:
-            zh_results = await self._search_once(client, title, language="zh-CN")
-            
-            # Use only zh_results to ensure names are always Chinese
-            results = sorted(zh_results, key=lambda x: x.confidence, reverse=True)
-            return results
+
+        client = self._get_client()
+        zh_results = await self._search_once(client, title, language="zh-CN")
+
+        # Use only zh_results to ensure names are always Chinese
+        results = sorted(zh_results, key=lambda x: x.confidence, reverse=True)
+        return results
+
+    async def validate_key(self) -> bool:
+        if not self.api_key:
+            return False
+
+        client = self._get_client()
+        try:
+            headers = self.headers if "Authorization" in self.headers else {"accept": "application/json"}
+            resp = await client.get(
+                f"{self.base_url}/configuration",
+                params=self.params,
+                headers=headers,
+                timeout=5.0,
+            )
+            return resp.status_code == 200
+        except Exception:
+            return False
 
     async def _search_once(self, client: httpx.AsyncClient, title: str, language: str) -> list[TmdbMatch]:
         try:
@@ -138,16 +174,16 @@ class TmdbClient:
     async def verify_episode(self, tmdb_id: int, season: int, episode: int) -> bool:
         if not self.api_key:
             return False
-            
-        async with httpx.AsyncClient() as client:
-            try:
-                headers = self.headers if "Authorization" in self.headers else {"accept": "application/json"}
-                resp = await client.get(
-                    f"{self.base_url}/tv/{tmdb_id}/season/{season}/episode/{episode}",
-                    params=self.params,
-                    headers=headers,
-                    timeout=10.0
-                )
-                return resp.status_code == 200
-            except Exception:
-                return False
+
+        client = self._get_client()
+        try:
+            headers = self.headers if "Authorization" in self.headers else {"accept": "application/json"}
+            resp = await client.get(
+                f"{self.base_url}/tv/{tmdb_id}/season/{season}/episode/{episode}",
+                params=self.params,
+                headers=headers,
+                timeout=10.0
+            )
+            return resp.status_code == 200
+        except Exception:
+            return False

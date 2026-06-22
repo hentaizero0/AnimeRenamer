@@ -1,5 +1,8 @@
 import asyncio
+import os
+import logging
 from typing import Any
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import json
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Body
@@ -8,12 +11,43 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
 
+from backend.domain.constants import SUBTITLE_SUFFIXES
+from backend.domain.mode import resolve_link_dir, resolve_mode
+from backend.domain.naming import build_video_stems_by_episode, compute_target_plan
 from backend.models import BatchTriageJob, FileTriageItem, TriageResult, TriageStatus, SeriesConfig
+from backend.adapters.state_store import coerce_triage_result, load_history, save_history
 from backend.config import load_config, SeriesDB
+from backend.services.queue_service import default_queue_service
+from backend.tmdb import TmdbClient
 from backend.triage import execute_triage_job
 from backend.watcher import start_watcher, DownloadDirHandler, find_all_anime_dirs
 
-app = FastAPI(title="AnimeRenamer API")
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global watcher_observer
+    _load_state()
+    key = get_effective_tmdb_key()
+    if key:
+        os.environ["TMDB_API_KEY"] = key
+        logger.info("[STARTUP] Loaded TMDB API key: ****%s", key[-4:])
+    else:
+        logger.info("[STARTUP] No TMDB API key found in settings")
+    logger.info("[STARTUP] config.tmdb_api_key: %s...", config.tmdb_api_key[:20] if config.tmdb_api_key else "EMPTY")
+    loop = asyncio.get_running_loop()
+    watcher_observer = start_watcher(loop, queue_service=queue_service, key_resolver=get_effective_tmdb_key, persist_state=_save_state)
+    try:
+        yield
+    finally:
+        if watcher_observer:
+            watcher_observer.stop()
+            watcher_observer.join()
+        await TmdbClient.aclose_all()
+
+
+app = FastAPI(title="AnimeRenamer API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -25,79 +59,74 @@ app.add_middleware(
 
 config = load_config("config/series_config.yaml")
 series_db = SeriesDB("config/series_config.yaml")
+queue_service = default_queue_service
 
 # In-memory stores
-queue: dict[str, BatchTriageJob] = {}
-history: list[dict] = []
+queue = queue_service.queue
+history = queue_service.history
 
-# ponytail: state persistence
 STATE_FILE = Path("state.json")
 
 def _load_state():
-    """Load state from JSON file on startup"""
-    if STATE_FILE.exists():
-        try:
-            data = json.loads(STATE_FILE.read_text())
-            # Only restore non-pending items (pending jobs are ephemeral)
-            global history
-            history = data.get("history", [])
-        except Exception as e:
-            print(f"[WARN] Failed to load state: {e}")
+    try:
+        queue_service.history[:] = load_history(STATE_FILE)
+    except Exception as e:
+        logger.warning("[WARN] Failed to load state: %s", e)
 
 def _save_state():
-    """Save state to JSON file after each operation"""
     try:
-        STATE_FILE.write_text(json.dumps({
-            "history": history[-100:],  # Keep last 100 entries
-            "timestamp": str(datetime.now(timezone.utc).isoformat())
-        }, default=str, indent=2))
+        save_history(STATE_FILE, history)
     except Exception as e:
-        print(f"[WARN] Failed to save state: {e}")
+        logger.warning("[WARN] Failed to save state: %s", e)
 
 watcher_observer = None
 
-@app.on_event("startup")
-async def startup_event():
-    global watcher_observer
-    _load_state()
-    
-    # Load saved settings (API key)
-    settings = _load_settings()
-    if settings.get("tmdb_api_key"):
-        import os
-        os.environ["TMDB_API_KEY"] = settings["tmdb_api_key"]
-        print(f"[STARTUP] Loaded TMDB API key from settings: {settings['tmdb_api_key'][:10]}...")
-    else:
-        print("[STARTUP] No TMDB API key found in settings")
-    
-    # Check config's tmdb_api_key
-    print(f"[STARTUP] config.tmdb_api_key: {config.tmdb_api_key[:20] if config.tmdb_api_key else 'EMPTY'}...")
-    
-    loop = asyncio.get_running_loop()
-    watcher_observer = start_watcher(loop)
+SETTINGS_FILE = Path.home() / ".config" / "anime_renamer" / "settings.json"
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    if watcher_observer:
-        watcher_observer.stop()
-        watcher_observer.join()
+
+def _load_settings() -> dict[str, str]:
+    if SETTINGS_FILE.exists():
+        try:
+            return json.loads(SETTINGS_FILE.read_text())
+        except Exception as e:
+            logger.warning("[WARN] Failed to load settings: %s", e)
+    return {"tmdb_api_key": ""}
+
+
+def _save_settings(settings: dict[str, str]) -> None:
+    try:
+        SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SETTINGS_FILE.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+        try:
+            os.chmod(SETTINGS_FILE, 0o600)
+        except OSError:
+            pass
+    except Exception as e:
+        logger.warning("[WARN] Failed to save settings: %s", e)
+
+
+def get_effective_tmdb_key() -> str:
+    key = (_load_settings().get("tmdb_api_key") or "").strip()
+    if key and "*" not in key and key != "${TMDB_API_KEY}":
+        return key
+    env_key = (os.environ.get("TMDB_API_KEY") or "").strip()
+    if env_key and "*" not in env_key and env_key != "${TMDB_API_KEY}":
+        return env_key
+    return ""
 
 @app.get("/api/stats")
 async def get_stats() -> dict[str, Any]:
-    pending = sum(1 for j in queue.values() if j.status == TriageStatus.pending)
-    errors = sum(1 for j in history if not j["result"].success)
+    pending = sum(1 for j in queue_service.queue.values() if j.status == TriageStatus.pending)
+    errors = sum(1 for j in queue_service.history if not (coerce_triage_result(j.get("result")) or TriageResult(success=False, source_path="")).success)
     processed_today = len(history)  # Simplified, could filter by date
-    return {"pending": pending, "processed_today": processed_today, "errors": errors}
+    return {"pending": pending, "today": processed_today, "processed_today": processed_today, "errors": errors}
 
 @app.get("/api/pending")
 async def get_queue() -> list[dict[str, Any]]:
     res = []
     for j in queue.values():
         if j.status == TriageStatus.pending:
-            s_conf = j.series_config
-            mode = s_conf.mode if s_conf else (j.default_mode or config.default_mode)
-            if mode == "auto" and j.has_conflict:
-                mode = "confirm"
+            mode = resolve_mode(j, config)
             target_path = "TBD"
             final_title = j.effective_title
             t_season = j.effective_season
@@ -145,7 +174,7 @@ async def get_queue() -> list[dict[str, Any]]:
             ))
             
             video_count = len(ep_set)
-            has_subs = any(1 for it in j.items if it.parsed and it.parsed.extension in ["ass", "srt", "ssa"] and not it.ignored)
+            has_subs = any(1 for it in j.items if it.parsed and f".{it.parsed.extension}" in SUBTITLE_SUFFIXES and not it.ignored)
             renamed_count = sum(1 for it in j.items if it.parsed and it.parsed.episode is not None and not it.ignored)
             total_count = len(j.items)
             
@@ -240,19 +269,15 @@ async def confirm_job(job_id: str, payload: dict[str, Any] = None) -> TriageResu
             if file_path.exists():
                 try:
                     file_path.unlink()
-                    print(f"[CONFIRM] Deleted ignored file: {it.relative_path}")
+                    logger.info("[CONFIRM] Deleted ignored file: %s", it.relative_path)
                 except Exception as e:
-                    print(f"[CONFIRM] Error deleting ignored file {it.relative_path}: {e}")
+                    logger.warning("[CONFIRM] Error deleting ignored file %s: %s", it.relative_path, e)
 
     job.status = TriageStatus.confirmed
     
     res = await execute_triage_job(job, config, dry_run=False)
     
-    history.insert(0, {
-        "job_id": job_id,
-        "result": res,
-        "title": job.effective_title,
-    })
+    queue_service.append_history(job_id, res, job.effective_title, mode=resolve_mode(job, config), confidence=job.confidence)
     if res.success:
         job.status = TriageStatus.done
         del queue[job_id]
@@ -271,92 +296,43 @@ async def preview_job(job_id: str) -> dict:
     anime_name = job.effective_title
     season = job.effective_season
     season_str = f"{season:02d}"
-    
-    download_dir = Path(config.download_dir)
     storage_dir = Path(config.storage_dir)
-    
-    mode = job.series_config.mode if job.series_config else (job.default_mode or config.default_mode)
-    if mode == "auto" and job.has_conflict:
-        mode = "confirm"
-        
-    if mode == "auto":
-        link_dir = Path(config.jellyfin_airing_dir) if config.jellyfin_airing_dir else None
-    else:
-        link_dir = Path(config.jellyfin_collect_dir) if config.jellyfin_collect_dir else None
+    mode = resolve_mode(job, config)
+    link_dir = resolve_link_dir(job, config, mode)
     
     renamed = []   # files that will be renamed
     preserved = [] # files that will be kept as-is (extras/bonus)
-    
-    # Pre-calculate video stems for preview accuracy
-    from collections import defaultdict
-    video_stems_by_ep: dict[int, list[str]] = defaultdict(list)
-    for it in job.items:
-        if it.ignored: continue
-        if it.is_video and it.parsed and it.parsed.episode is not None:
-            src = download_dir / it.relative_path
-            if src.exists():
-                video_stems_by_ep[it.parsed.episode].append(src.stem)
-
+    video_stems_by_ep = build_video_stems_by_episode(job, Path(config.download_dir))
     for it in job.items:
         if it.ignored:
             continue
-            
-        source_file = download_dir / it.relative_path
-        old_name = source_file.name
-        
-        episode = it.parsed.episode if it.parsed else None
-        
-        if episode is not None:
-            season_str = f"{season:02d}"
-            episode_str = f"{episode:02d}"
-            target_stem = f"{anime_name} S{season_str}E{episode_str}"
-            
-            target_filename = None
-            for v_stem in video_stems_by_ep.get(episode, []):
-                if old_name.startswith(v_stem):
-                    target_filename = old_name.replace(v_stem, target_stem, 1)
-                    break
-                    
-            if not target_filename:
-                ext = "".join(source_file.suffixes)
-                target_filename = f"{target_stem}{ext}"
-                
-            new_path = str(storage_dir / anime_name / f"Season {season_str}" / target_filename)
-            hardlink_path = None
-            hardlink_root = None
+        plan = compute_target_plan(job, it, config, video_stems_by_ep, mode, link_dir)
+        if plan.episode is not None:
+            hardlink_root = plan.link_target.parent.parent.name if plan.link_target and mode != "auto" else (plan.link_target.parent.name if plan.link_target else None)
             hardlink_dir = None
-            if link_dir and (it.is_video or source_file.suffix.lower() in [".ass", ".srt", ".ssa"]):
-                hardlink_path = str(link_dir / anime_name / f"Season {season_str}" / target_filename)
-                hardlink_root = link_dir.name
-                hardlink_dir = f"{anime_name}/Season {season_str}"
-
+            if plan.link_target:
+                hardlink_dir = str(plan.link_target.parent.relative_to(link_dir))
+            if mode == "auto":
+                dest_dir = str(plan.target_file.parent.relative_to(Path(config.download_dir))).replace("\\", "/")
+            else:
+                dest_dir = str(plan.target_file.parent.relative_to(storage_dir)).replace("\\", "/")
             renamed.append({
-                "old_name": old_name,
-                "new_name": target_filename,
-                "new_path": new_path,
-                "hardlink_path": hardlink_path,
+                "old_name": plan.source_file.name,
+                "new_name": plan.target_filename,
+                "new_path": str(plan.target_file),
+                "hardlink_path": str(plan.link_target) if plan.link_target else None,
                 "dest_root": storage_dir.name,
-                "dest_dir": f"{anime_name}/Season {season_str}",
+                "dest_dir": dest_dir,
                 "hardlink_root": hardlink_root,
                 "hardlink_dir": hardlink_dir,
                 "is_video": it.is_video,
-                "episode": episode,
+                "episode": plan.episode,
             })
         else:
-            # Extra / bonus — preserved with original name
-            if job.source_dir != ".":
-                try:
-                    rel = source_file.relative_to(download_dir / job.source_dir)
-                except ValueError:
-                    rel = Path(old_name)
-            else:
-                rel = Path(old_name)
-            
-            season_str = f"{season:02d}"
-            dest_dir = f"{anime_name}/Season {season_str}/{rel.parent}" if (rel.parent and rel.parent != Path(".")) else f"{anime_name}/Season {season_str}"
+            dest_dir = f"{anime_name}/Season {season_str}/{plan.relative_name.parent}" if (plan.relative_name.parent and plan.relative_name.parent != Path(".")) else f"{anime_name}/Season {season_str}"
             preserved.append({
-                "old_name": str(rel),   # preserve subdirectory structure in name
-                "new_path": str(storage_dir / anime_name / f"Season {season_str}" / rel),
+                "old_name": str(plan.relative_name),
+                "new_path": str(plan.target_file),
                 "dest_root": storage_dir.name,
                 "dest_dir": dest_dir,
                 "is_video": it.is_video,
@@ -434,7 +410,9 @@ async def get_history() -> list[dict[str, Any]]:
     res = []
     # Reverse history to show newest first
     for entry in reversed(history):
-        r = entry["result"]
+        r = coerce_triage_result(entry.get("result"))
+        if r is None:
+            continue
         res.append({
             "id": entry["job_id"],
             "status": "done" if r.success else "error",
@@ -469,34 +447,20 @@ async def trigger_scan() -> dict[str, str]:
                     if file_path.exists():
                         try:
                             file_path.unlink()
-                            print(f"[SCAN] Deleted ignored file: {it.relative_path}")
+                            logger.info("[SCAN] Deleted ignored file: %s", it.relative_path)
                         except Exception as e:
-                            print(f"[SCAN] Error deleting ignored file {it.relative_path}: {e}")
+                            logger.warning("[SCAN] Error deleting ignored file %s: %s", it.relative_path, e)
 
-    handler = DownloadDirHandler(config, series_db, asyncio.get_running_loop())
+    handler = DownloadDirHandler(config, series_db, asyncio.get_running_loop(), queue_service=queue_service, key_resolver=get_effective_tmdb_key, persist_state=_save_state)
     
     count = 0
     from backend.watcher import find_all_anime_dirs
     dirs_to_scan = find_all_anime_dirs(download_dir)
             
     # Clean up missing directories from queue
-    keys_to_delete = []
-    for job_id, job in queue.items():
-        if job.status == TriageStatus.pending:
-            src = Path(config.download_dir) / job.source_dir
-            if not src.exists():
-                keys_to_delete.append(job_id)
-    for k in keys_to_delete:
-        del queue[k]
-        
+    queue_service.prune_missing_jobs(download_dir)
     valid_source_dirs = {str(d.relative_to(download_dir)) for d, _ in dirs_to_scan}
-    keys_to_delete_invalid = []
-    for job_id, job in queue.items():
-        if job.status == TriageStatus.pending:
-            if job.source_dir not in valid_source_dirs:
-                keys_to_delete_invalid.append(job_id)
-    for k in keys_to_delete_invalid:
-        del queue[k]
+    queue_service.prune_invalid_jobs(valid_source_dirs)
 
     for d, mode in dirs_to_scan:
         handler.process_dir_event(d, strict=(mode == "confirm"))
@@ -508,7 +472,6 @@ async def trigger_scan() -> dict[str, str]:
 async def get_series() -> list[dict[str, Any]]:
     # ponytail: convert dict to array with metadata for frontend compatibility
     return [{**{"name": name}, **config.model_dump()} for name, config in series_db._series.items()]
-    return series_db._series
 
 @app.post("/api/series")
 async def add_series(series: SeriesConfig) -> dict[str, str]:
@@ -568,9 +531,6 @@ async def update_directory_mode(folder_name: str, update: DirectoryModeUpdate) -
         target_dir.relative_to(download_dir.resolve())
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid path")
-    if False:  # ponytail: path check done via relative_to above:
-        raise HTTPException(status_code=400, detail="Invalid path")
-        
     if not target_dir.exists() or not target_dir.is_dir():
         raise HTTPException(status_code=404, detail="Directory not found")
         
@@ -585,7 +545,7 @@ async def update_directory_mode(folder_name: str, update: DirectoryModeUpdate) -
     yaml_path.write_text(f"mode: {update.mode}\n", encoding="utf-8")
     
     # Re-scan this directory
-    handler = DownloadDirHandler(config, series_db, asyncio.get_running_loop())
+    handler = DownloadDirHandler(config, series_db, asyncio.get_running_loop(), queue_service=queue_service, key_resolver=get_effective_tmdb_key, persist_state=_save_state)
     # If mode is auto, we don't need strict matching. If confirm, we use strict.
     strict = (update.mode == "confirm")
     
@@ -640,47 +600,30 @@ async def get_auto_subscriptions():
     res.sort(key=lambda x: x["name"])
     return res
 
-# Mount frontend at root last, so API routes take precedence
-
-app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
-
-# ── Settings ───────────────────────────────────────────────────────────────
-SETTINGS_FILE = Path.home() / '.config' / 'anime_renamer' / 'settings.json'
-
-def _load_settings() -> dict:
-    """Load settings from user config directory"""
-    if SETTINGS_FILE.exists():
-        try:
-            return json.loads(SETTINGS_FILE.read_text())
-        except Exception as e:
-            print(f"[WARN] Failed to load settings: {e}")
-    return {"tmdb_api_key": ""}
-
-def _save_settings(settings: dict):
-    """Save settings to user config directory"""
-    try:
-        SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        SETTINGS_FILE.write_text(json.dumps(settings, indent=2))
-    except Exception as e:
-        print(f"[WARN] Failed to save settings: {e}")
-
 @app.get("/api/settings")
 async def get_settings() -> dict[str, Any]:
-    """Retrieve current settings (mask API key)"""
-    settings = _load_settings()
-    if settings.get("tmdb_api_key"):
-        settings["tmdb_api_key"] = settings["tmdb_api_key"][:5] + "***"
-    return settings
+    key = get_effective_tmdb_key()
+    return {"has_key": bool(key), "key_hint": f"****{key[-4:]}" if key else ""}
+
+@app.get("/api/settings/validate")
+async def validate_settings() -> dict[str, bool]:
+    key = get_effective_tmdb_key()
+    if not key:
+        return {"has_key": False, "valid": False}
+    return {"has_key": True, "valid": await TmdbClient(key).validate_key()}
 
 @app.post("/api/settings")
 async def update_settings(payload: dict[str, Any] = Body(...)) -> dict[str, str]:
-    """Update settings (e.g., TMDB API key)"""
     settings = _load_settings()
-    if "tmdb_api_key" in payload:
-        settings["tmdb_api_key"] = payload["tmdb_api_key"]
-        # Update environment for immediate use
-        import os
-        os.environ["TMDB_API_KEY"] = payload["tmdb_api_key"]
+    raw = (payload.get("tmdb_api_key") or "").strip()
+    if not raw or raw == "${TMDB_API_KEY}":
+        return {"status": "unchanged"}
+    if "*" in raw:
+        raise HTTPException(status_code=400, detail="masked value rejected")
+    settings["tmdb_api_key"] = raw
     _save_settings(settings)
+    os.environ["TMDB_API_KEY"] = raw
     return {"status": "settings updated"}
 
+# Mount frontend at root last, so API routes take precedence
+app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")

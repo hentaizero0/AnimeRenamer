@@ -42,7 +42,7 @@ python -m pytest backend/tests/test_tmdb_key_flow.py -v
 ## 给 Gemini 的统一作业守则（每个任务先贴这段）
 
 ```
-你在修改 Python 3.14 + FastAPI 项目 AnimeRenamer。规则：
+你在修改 Python 3.12 + FastAPI 项目 AnimeRenamer。规则：
 1. 一次只做当前文件里的一个批次，做完就停，输出 diff，等我确认。
 2. 改前先 view 出点名的真实代码，确认和描述一致再改；只改点名文件，别动无关代码。
 3. 每批做完跑 python -m pytest backend/tests -q，必须 0 failed（Windows 上权限测试 skip 属正常）。
@@ -52,5 +52,4 @@ python -m pytest backend/tests/test_tmdb_key_flow.py -v
 
 ## 环境
 
-- 开发机：Windows + Python 3.14.6，依赖已 `pip install -r requirements.txt`。
 - 部署：Linux/Unraid。**POSIX 专属项（0600 权限、hardlink）在 Windows 上 skip，由 Linux 侧验证**（见 02 文件末尾 Linux 待办）。

@@ -3,15 +3,18 @@
 
 const API_BASE = 'http://localhost:8765/api';
 let _apiOnline = null; // null = untested, true/false = cached result
+let _apiCheckedAt = 0;
+const API_ONLINE_TTL_MS = 10000;
 
 async function _checkOnline() {
-  if (_apiOnline === true) return true;
+  if (_apiOnline !== null && Date.now() - _apiCheckedAt < API_ONLINE_TTL_MS) return _apiOnline;
   try {
     const r = await fetch(`${API_BASE}/stats`, { signal: AbortSignal.timeout(1500) });
     _apiOnline = r.ok;
   } catch {
     _apiOnline = false;
   }
+  _apiCheckedAt = Date.now();
   return _apiOnline;
 }
 
@@ -98,19 +101,35 @@ const API = {
     return await _post(`/directories/${encodeURIComponent(folder)}/mode`, { mode });
   },
   getSettings: async () => {
-    return (await _get('/settings')) ?? { tmdb_api_key: '' };
+    return (await _get('/settings')) ?? { has_key: false, key_hint: '' };
+  },
+  getTmdbStatus: async () => {
+    return (await _get('/settings/validate')) ?? { has_key: false, valid: false };
   },
   updateSettings: async (data = {}) => {
     return (await _post('/settings', data)) ?? { status: 'ok' };
   },
   async isOnline() {
-    // Check both API availability and TMDB key configuration
     if (!await _checkOnline()) return false;
     try {
-      const settings = await this.getSettings();
-      return !!(settings && settings.tmdb_api_key);
+      const status = await this.getTmdbStatus();
+      return !!(status && status.valid);
     } catch {
       return false;
+    }
+  },
+  async getConnectivityStatus() {
+    const apiOnline = await _checkOnline();
+    if (!apiOnline) return { apiOnline: false, hasKey: false, tmdbValid: false };
+    try {
+      const status = await this.getTmdbStatus();
+      return {
+        apiOnline: true,
+        hasKey: !!status?.has_key,
+        tmdbValid: !!status?.valid,
+      };
+    } catch {
+      return { apiOnline: true, hasKey: false, tmdbValid: false };
     }
   },
 };

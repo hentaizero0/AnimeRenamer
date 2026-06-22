@@ -17,7 +17,7 @@ pip install -r requirements.txt
 ```bash
 # 清空并重建 regression_downloads 目录结构（模拟 Unraid 的 /mnt/user/hentaidisk/Downloads）
 # 同时清空 regression_target（模拟 /mnt/user/hentaidisk/video 的 anime 和 link 目录）
-python reset_env.py
+python scripts/reset_env.py
 ```
 
 > 源头是 `unriad.output`（从真实 Unraid 导出的目录树），脚本会 1:1 重建到 `regression_downloads/Downloads/`。
@@ -58,7 +58,7 @@ curl -X POST http://localhost:8765/api/scan
 
 ```yaml
 settings:
-  tmdb_api_key: "your_key_here"
+  tmdb_api_key: "your_key_here"  # 或直接用环境变量 TMDB_API_KEY
   download_dir: "/workspaces/anime_triage/regression_downloads/Downloads"  # 开发环境
   storage_dir: "/workspaces/anime_triage/regression_target/mnt/user/hentaidisk/video/anime"
   jellyfin_airing_dir: "...video/link/Bangumi"

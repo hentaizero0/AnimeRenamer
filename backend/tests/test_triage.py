@@ -247,7 +247,7 @@ class TestExecuteTriageJob:
         job = BatchTriageJob(id="job7", source_dir=".", items=[item])
         res = await execute_triage_job(job, config, dry_run=False)
         assert res.success is True
-        assert (storage_dir / "Frieren" / "behind_scenes.mkv").exists()
+        assert (storage_dir / "Frieren" / "Season 01" / "behind_scenes.mkv").exists()
 
     @pytest.mark.asyncio
     async def test_execute_triage_no_episode_value_error(self, setup_dirs):
@@ -262,7 +262,7 @@ class TestExecuteTriageJob:
         job = BatchTriageJob(id="job7_val_err", source_dir="Frieren", items=[item])
         res = await execute_triage_job(job, config, dry_run=False)
         assert res.success is True
-        assert (storage_dir / "Frieren" / "extra.mkv").exists()
+        assert (storage_dir / "Frieren" / "Season 01" / "extra.mkv").exists()
 
     @pytest.mark.asyncio
     async def test_execute_triage_cleanup_remaining_files(self, setup_dirs):
@@ -284,7 +284,7 @@ class TestExecuteTriageJob:
         assert res.success is True
         
         # Verify the remaining file was swept to storage and the source folder was deleted
-        assert (storage_dir / "Frieren" / "remaining_metadata.nfo").exists()
+        assert (storage_dir / "Frieren" / "Season 01" / "remaining_metadata.nfo").exists()
         assert not (download_dir / "Frieren").exists()
 
     @pytest.mark.asyncio
