@@ -66,7 +66,7 @@ function showToast(message, type = 'info') {
 // ── Navigation// ────────────────────────────────────────────────────────────────
 function navigate(view) {
   currentView = view;
-  const titles = { dashboard: '仪表盘', series: '番剧库', logs: '操作日志', rules: '规则目录', ignored: '已忽略目录' };
+  const titles = { dashboard: '仪表盘', series: '番剧库', logs: '操作日志', rules: '规则目录', ignored: '已忽略目录', settings: '设置' };
   const topbarTitle = document.getElementById('topbar-title');
   if (topbarTitle && titles[view]) topbarTitle.textContent = titles[view];
   document.querySelectorAll('.nav-item').forEach(el => {
@@ -85,6 +85,7 @@ async function renderView(view) {
   else if (view === 'logs') await renderLogs();
   else if (view === 'rules') await renderRules();
   else if (view === 'ignored') await renderIgnored();
+  else if (view === 'settings') await renderSettings();
 }
 
 // ── Dashboard view ────────────────────────────────────────────────────────────
