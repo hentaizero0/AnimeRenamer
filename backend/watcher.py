@@ -11,12 +11,26 @@ from backend.tmdb import TmdbClient
 
 
 async def tmdb_async_resolve(job_id: str, search_title: str, dir_name: str, config):
-    if not config.tmdb_api_key:
+    # ponytail: Load API key from settings.json if config is empty or placeholder
+    api_key = config.tmdb_api_key
+    if not api_key or api_key.startswith('$'):
+        # Try loading from settings
+        from pathlib import Path
+        import json
+        settings_file = Path.home() / '.config' / 'anime_renamer' / 'settings.json'
+        if settings_file.exists():
+            try:
+                data = json.loads(settings_file.read_text())
+                api_key = data.get('tmdb_api_key', '')
+            except:
+                pass
+    
+    if not api_key:
         print(f"[TMDB] Skipping TMDB resolve for {job_id}: API key is empty")
         return
         
     print(f"[TMDB] Resolving {job_id} with title='{search_title}', dir='{dir_name}'")
-    client = TmdbClient(config.tmdb_api_key)
+    client = TmdbClient(api_key)
     
     # Try searching by parsed title first
     results = await client.search_anime(search_title)
