@@ -60,6 +60,14 @@ watcher_observer = None
 async def startup_event():
     global watcher_observer
     _load_state()
+    
+    # Load saved settings (API key)
+    settings = _load_settings()
+    if settings.get("tmdb_api_key"):
+        import os
+        os.environ["TMDB_API_KEY"] = settings["tmdb_api_key"]
+        print("[STARTUP] Loaded TMDB API key from settings")
+    
     loop = asyncio.get_running_loop()
     watcher_observer = start_watcher(loop)
 
@@ -630,3 +638,44 @@ async def get_auto_subscriptions():
 # Mount frontend at root last, so API routes take precedence
 
 app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
+
+# ── Settings ───────────────────────────────────────────────────────────────
+SETTINGS_FILE = Path.home() / '.config' / 'anime_renamer' / 'settings.json'
+
+def _load_settings() -> dict:
+    """Load settings from user config directory"""
+    if SETTINGS_FILE.exists():
+        try:
+            return json.loads(SETTINGS_FILE.read_text())
+        except Exception as e:
+            print(f"[WARN] Failed to load settings: {e}")
+    return {"tmdb_api_key": ""}
+
+def _save_settings(settings: dict):
+    """Save settings to user config directory"""
+    try:
+        SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SETTINGS_FILE.write_text(json.dumps(settings, indent=2))
+    except Exception as e:
+        print(f"[WARN] Failed to save settings: {e}")
+
+@app.get("/api/settings")
+async def get_settings() -> dict[str, Any]:
+    """Retrieve current settings (mask API key)"""
+    settings = _load_settings()
+    if settings.get("tmdb_api_key"):
+        settings["tmdb_api_key"] = settings["tmdb_api_key"][:5] + "***"
+    return settings
+
+@app.post("/api/settings")
+async def update_settings(payload: dict[str, Any]) -> dict[str, str]:
+    """Update settings (e.g., TMDB API key)"""
+    settings = _load_settings()
+    if "tmdb_api_key" in payload:
+        settings["tmdb_api_key"] = payload["tmdb_api_key"]
+        # Update environment for immediate use
+        import os
+        os.environ["TMDB_API_KEY"] = payload["tmdb_api_key"]
+    _save_settings(settings)
+    return {"status": "settings updated"}
+
