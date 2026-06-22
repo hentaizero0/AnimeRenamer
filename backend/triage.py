@@ -125,18 +125,28 @@ async def execute_triage_job(
                 target_file = storage_dir / anime_name / f"Season {season_str}" / target_filename
             
             res = rename_and_move(source_file, target_file, dry_run)
+            if res.success and not dry_run:
+                executed_moves.append((source_file, target_file))
             if not res.success:
                 overall_success = False
                 error_msg = res.error_msg
+                # ponytail: rollback on failure
+                for src, dst in reversed(executed_moves):
+                    try:
+                        shutil.move(str(dst), str(src))
+                    except Exception as e:
+                        print(f"[ROLLBACK] Failed to rollback {dst} to {src}: {e}")
                 break
                 
-            # Hardlink if it's a video or subtitle
+            # Hardlink if it's a video or subtitle (ponytail: unified Season structure)
             if link_dir and (it.is_video or source_file.suffix.lower() in [".ass", ".srt", ".ssa"]):
-                if mode == "auto":
-                    link_target = link_dir / anime_name / target_filename
-                else:
-                    link_target = link_dir / anime_name / f"Season {season_str}" / target_filename
-                create_hardlink(target_file, link_target, dry_run)
+                season_str = f"{season:02d}"
+                link_target = link_dir / anime_name / f"Season {season_str}" / target_filename
+                link_res = create_hardlink(target_file, link_target, dry_run)
+                if not link_res.success:
+                    overall_success = False
+                    error_msg = f"Hardlink failed: {link_res.error_msg}"
+                    break
                 
         else:
             # No episode detected, it might be a movie or an extra
@@ -148,31 +158,23 @@ async def execute_triage_job(
             else:
                 rel_to_anime = Path(source_file.name)
                 
+            season_str = f"{season:02d}"
+                
             if mode == "auto":
                 target_file = source_file
             else:
-                target_file = storage_dir / anime_name / rel_to_anime
+                target_file = storage_dir / anime_name / f"Season {season_str}" / rel_to_anime
                 res = rename_and_move(source_file, target_file, dry_run)
+            if res.success and not dry_run:
+                executed_moves.append((source_file, target_file))
                 if not res.success:
                     overall_success = False
                     error_msg = res.error_msg
                     break
             
-            if link_dir and (it.is_video or source_file.suffix.lower() in [".ass", ".srt", ".ssa"]):
-                # Do not hardlink extras (files in subfolders not named Season) to the TV link directory
-                is_extra = False
-                if len(rel_to_anime.parts) > 1:
-                    for p in rel_to_anime.parts[:-1]:
-                        if not p.lower().startswith("season"):
-                            is_extra = True
-                            break
-                            
-                if not is_extra:
-                    if mode == "auto":
-                        link_target = link_dir / anime_name / rel_to_anime
-                    else:
-                        link_target = link_dir / anime_name / rel_to_anime
-                    create_hardlink(target_file, link_target, dry_run)
+            # The user explicitly requested: DO NOT hardlink extras to Jellyfin/link_dir
+            # even if they are placed in Season XX.
+            pass
             
     # Cleanup only in confirm mode
     if mode != "auto":
@@ -184,7 +186,9 @@ async def execute_triage_job(
                         rel_to_anime = child.relative_to(source_dir_path)
                     except ValueError:
                         rel_to_anime = Path(child.name)
-                    target_file = storage_dir / anime_name / rel_to_anime
+                    
+                    season_str = f"{season:02d}"
+                    target_file = storage_dir / anime_name / f"Season {season_str}" / rel_to_anime
                     rename_and_move(child, target_file, dry_run)
             
             try:

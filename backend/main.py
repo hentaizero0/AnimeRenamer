@@ -1,5 +1,7 @@
 import asyncio
 from typing import Any
+from datetime import datetime, timezone
+import json
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -28,11 +30,36 @@ series_db = SeriesDB("config/series_config.yaml")
 queue: dict[str, BatchTriageJob] = {}
 history: list[dict] = []
 
+# ponytail: state persistence
+STATE_FILE = Path("state.json")
+
+def _load_state():
+    """Load state from JSON file on startup"""
+    if STATE_FILE.exists():
+        try:
+            data = json.loads(STATE_FILE.read_text())
+            # Only restore non-pending items (pending jobs are ephemeral)
+            global history
+            history = data.get("history", [])
+        except Exception as e:
+            print(f"[WARN] Failed to load state: {e}")
+
+def _save_state():
+    """Save state to JSON file after each operation"""
+    try:
+        STATE_FILE.write_text(json.dumps({
+            "history": history[-100:],  # Keep last 100 entries
+            "timestamp": str(datetime.now(timezone.utc).isoformat())
+        }, default=str, indent=2))
+    except Exception as e:
+        print(f"[WARN] Failed to save state: {e}")
+
 watcher_observer = None
 
 @app.on_event("startup")
 async def startup_event():
     global watcher_observer
+    _load_state()
     loop = asyncio.get_running_loop()
     watcher_observer = start_watcher(loop)
 
@@ -46,8 +73,8 @@ async def shutdown_event():
 async def get_stats() -> dict[str, Any]:
     pending = sum(1 for j in queue.values() if j.status == TriageStatus.pending)
     errors = sum(1 for j in history if not j["result"].success)
-    today = len(history)  # Simplified, could filter by date
-    return {"pending": pending, "today": today, "errors": errors}
+    processed_today = len(history)  # Simplified, could filter by date
+    return {"pending": pending, "processed_today": processed_today, "errors": errors}
 
 @app.get("/api/pending")
 async def get_queue() -> list[dict[str, Any]]:
@@ -124,7 +151,7 @@ async def get_queue() -> list[dict[str, Any]]:
                 "target_path": f"{target_path}",
                 "status": j.status.value,
                 "source_size": f"{renamed_count}/{total_count} items",
-                "detected_at": "Just now"
+                "detected_at": datetime.now(timezone.utc).isoformat()
             })
             
     from collections import defaultdict
@@ -174,16 +201,23 @@ async def get_ignored() -> list[dict[str, Any]]:
                 "reason": j.ignore_reason,
                 "confidence": j.confidence,
                 "items_count": len(j.items),
-                "detected_at": "Just now"
+                "detected_at": datetime.now(timezone.utc).isoformat()
             })
     return res
 
 @app.post("/api/pending/{job_id}/confirm")
-async def confirm_job(job_id: str) -> TriageResult:
+async def confirm_job(job_id: str, payload: dict[str, Any] = None) -> TriageResult:
     if job_id not in queue:
         raise HTTPException(status_code=404, detail="Job not found")
     
     job = queue[job_id]
+    
+    # ponytail: Apply user edits if provided
+    if payload:
+        if "title" in payload:
+            job.override_title = payload["title"]
+        if "season" in payload:
+            job.override_season = payload["season"]
     
     # Defer deletion: physically delete ignored items before executing triage
     download_dir = Path(config.download_dir)
@@ -211,7 +245,8 @@ async def confirm_job(job_id: str) -> TriageResult:
         del queue[job_id]
     else:
         job.status = TriageStatus.error
-        
+    
+    _save_state()
     return res
 
 @app.get("/api/pending/{job_id}/preview")
@@ -304,10 +339,11 @@ async def preview_job(job_id: str) -> dict:
             else:
                 rel = Path(old_name)
             
-            dest_dir = f"{anime_name}/{rel.parent}" if (rel.parent and rel.parent != Path(".")) else anime_name
+            season_str = f"{season:02d}"
+            dest_dir = f"{anime_name}/Season {season_str}/{rel.parent}" if (rel.parent and rel.parent != Path(".")) else f"{anime_name}/Season {season_str}"
             preserved.append({
                 "old_name": str(rel),   # preserve subdirectory structure in name
-                "new_path": str(storage_dir / anime_name / rel),
+                "new_path": str(storage_dir / anime_name / f"Season {season_str}" / rel),
                 "dest_root": storage_dir.name,
                 "dest_dir": dest_dir,
                 "is_video": it.is_video,
@@ -456,7 +492,9 @@ async def trigger_scan() -> dict[str, str]:
     return {"status": f"scan triggered, processed {count} directories"}
 
 @app.get("/api/series")
-async def get_series() -> dict[str, SeriesConfig]:
+async def get_series() -> list[dict[str, Any]]:
+    # ponytail: convert dict to array with metadata for frontend compatibility
+    return [{**{"name": name}, **config.model_dump()} for name, config in series_db._series.items()]
     return series_db._series
 
 @app.post("/api/series")
@@ -513,7 +551,11 @@ async def update_directory_mode(folder_name: str, update: DirectoryModeUpdate) -
     download_dir = Path(config.download_dir)
     target_dir = (download_dir / folder_name).resolve()
     
-    if not str(target_dir).startswith(str(download_dir)):
+    try:
+        target_dir.relative_to(download_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    if False:  # ponytail: path check done via relative_to above:
         raise HTTPException(status_code=400, detail="Invalid path")
         
     if not target_dir.exists() or not target_dir.is_dir():
