@@ -116,7 +116,7 @@ uid=99(nobody) gid=100(users) groups=100(users),98(nobody)
 
 ```yaml
 settings:
-  tmdb_api_key: "5e97c1d152a2609f6e208a52081b00f0"
+  tmdb_api_key: "${TMDB_API_KEY}"
   confidence_threshold: 0.85
   default_mode: confirm
   # 下载监控目录（建议只监控 Bangumi 子目录，过滤非动画文件）
@@ -215,7 +215,7 @@ services:
     environment:
       - PUID=99
       - PGID=100
-      - TMDB_API_KEY=5e97c1d152a2609f6e208a52081b00f0
+      - TMDB_API_KEY=${TMDB_API_KEY}
     volumes:
       # 只挂载 Bangumi 子目录，过滤非动画内容
       - /mnt/user/hentaidisk/Downloads/Bangumi:/downloads

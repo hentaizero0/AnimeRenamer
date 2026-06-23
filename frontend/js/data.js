@@ -1,5 +1,5 @@
 // ─── Mock Data ────────────────────────────────────────────────────────────────
-// Used when the backend API at localhost:8765 is unavailable.
+// Used when the same-origin backend API is unavailable.
 
 const MOCK = {
   stats: {
