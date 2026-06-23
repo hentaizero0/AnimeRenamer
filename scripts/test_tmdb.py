@@ -1,8 +1,11 @@
 import asyncio, httpx, json
+import os
 
-API_KEY = "${TMDB_API_KEY}"
+API_KEY = os.environ.get("TMDB_API_KEY", "")
 
 async def main():
+    if not API_KEY:
+        raise SystemExit("Set TMDB_API_KEY before running this script.")
     async with httpx.AsyncClient() as client:
         # Search WITHOUT language
         resp = await client.get("https://api.themoviedb.org/3/search/tv", params={"api_key": API_KEY, "query": "Chainsaw Man - The Compilation"})

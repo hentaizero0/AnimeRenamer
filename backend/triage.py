@@ -1,3 +1,4 @@
+import asyncio
 import shutil
 from pathlib import Path
 import logging
@@ -11,6 +12,14 @@ from backend.config import AppConfig
 logger = logging.getLogger(__name__)
 
 async def execute_triage_job(
+    job: BatchTriageJob,
+    config: AppConfig,
+    dry_run: bool = False,
+) -> TriageResult:
+    return await asyncio.to_thread(_execute_triage_job_sync, job, config, dry_run)
+
+
+def _execute_triage_job_sync(
     job: BatchTriageJob,
     config: AppConfig,
     dry_run: bool = False,

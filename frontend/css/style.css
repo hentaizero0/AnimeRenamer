@@ -830,6 +830,11 @@ th {
   background: rgba(0,0,0,0.4);
 }
 
+.form-input:disabled, .form-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
 .modal-footer {

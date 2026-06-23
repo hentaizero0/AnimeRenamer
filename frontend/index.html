@@ -239,18 +239,50 @@
         <div class="section-header">
           <h2 class="section-title">⚙️ 设置</h2>
         </div>
-        
+
         <div class="card">
           <div class="card-body">
             <h3 style="margin-top:0">TMDB API 密钥</h3>
             <p style="color:var(--text-muted);font-size:12px">用于查询番剧信息。从 <a href="https://www.themoviedb.org/settings/api" target="_blank">TMDB</a> 获取。</p>
-            
+
             <div style="display:flex;gap:10px;margin-top:15px">
               <input type="password" id="settings-tmdb-key" placeholder="粘贴你的 TMDB API key" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:4px;font-family:monospace;font-size:12px">
               <button onclick="saveTmdbKey()" style="padding:8px 16px;background:var(--accent);color:white;border:none;border-radius:4px;cursor:pointer">保存</button>
             </div>
-            
+
             <div id="settings-status" style="margin-top:10px;font-size:12px;color:var(--text-muted)"></div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px;">
+          <div class="card-body">
+            <h3 style="margin-top:0">预留路径配置</h3>
+            <p style="color:var(--text-muted);font-size:12px">ponytail: 先占位，不接后端保存，等后续目录策略和媒体库逻辑一起做。</p>
+
+            <div class="form-group">
+              <label class="form-label" for="settings-storage-collect-dir">冷盘收藏目录</label>
+              <input class="form-input mono" id="settings-storage-collect-dir" type="text" placeholder="/mnt/user/hentaidisk/video/anime" disabled>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="settings-jellyfin-root-dir">Jellyfin 根目录</label>
+              <input class="form-input mono" id="settings-jellyfin-root-dir" type="text" placeholder="/mnt/user/hentaidisk/video" disabled>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="settings-jellyfin-airing-dir">Jellyfin 追番路径</label>
+              <input class="form-input mono" id="settings-jellyfin-airing-dir" type="text" placeholder="/mnt/user/hentaidisk/video/link/Bangumi" disabled>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="settings-jellyfin-collect-dir">Jellyfin 收藏路径</label>
+              <input class="form-input mono" id="settings-jellyfin-collect-dir" type="text" placeholder="/mnt/user/hentaidisk/video/link/anime/动漫" disabled>
+            </div>
+
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label" for="settings-jellyfin-movie-dir">Jellyfin 电影路径</label>
+              <input class="form-input mono" id="settings-jellyfin-movie-dir" type="text" placeholder="/mnt/user/hentaidisk/video/link/movie/电影" disabled>
+            </div>
           </div>
         </div>
       </section>

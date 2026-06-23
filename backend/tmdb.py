@@ -168,7 +168,7 @@ class TmdbClient:
                 ))
             return results
         except Exception as e:
-            print(f"TMDB search error ({language}): {e}")
+            print(f"TMDB search error ({language}): {type(e).__name__}: {e!r}")
             return []
 
     async def verify_episode(self, tmdb_id: int, season: int, episode: int) -> bool:
