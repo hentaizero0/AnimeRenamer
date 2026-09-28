@@ -13,6 +13,7 @@
 | 4 | [04-dead-code-cleanup.md](04-dead-code-cleanup.md) | cleanup | P2 | 无 |
 | 5 | [05-refactor-modularization.md](05-refactor-modularization.md) | refactor | P2 | **必须 1–4 全绿后**才能开始 |
 | 6 | [06-optimizations.md](06-optimizations.md) | optimization | P2 | D2/D3 建议并入重构 |
+| 7 | [07-logging-refactor.md](07-logging-refactor.md) | logging / UX | P1 | 无 |
 
 ## 依赖关系图
 
@@ -53,3 +54,10 @@ python -m pytest backend/tests/test_tmdb_key_flow.py -v
 ## 环境
 
 - 部署：Linux/Unraid。**POSIX 专属项（0600 权限、hardlink）在 Windows 上 skip，由 Linux 侧验证**（见 02 文件末尾 Linux 待办）。
+
+
+## 追加计划
+
+| 顺序 | 文件 | 分类 | 优先级 | 前置依赖(Blocker) |
+|---|---|---|---|---|
+| 8 | [08-anime-title-season-recognition.md](08-anime-title-season-recognition.md) | bugfix / 动画名称与季度识别 | P1 | 按文内复现与回归分批执行；在线队列另补安全快照 |
