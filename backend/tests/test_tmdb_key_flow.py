@@ -189,7 +189,7 @@ class TestPostSettingsGuards:
 
 
 # ===========================================================================
-# resolver 单一真相源：settings.json → env → ""
+# resolver 单一真相源：env → settings.json → ""
 # ===========================================================================
 class TestEffectiveKeyResolver:
     def test_e_resolver_reads_settings_file(self, settings_file):
@@ -202,10 +202,10 @@ class TestEffectiveKeyResolver:
         monkeypatch.setenv("TMDB_API_KEY", "env_key_1234567890")
         assert _resolver()() == "env_key_1234567890"
 
-    def test_e_resolver_settings_precedence_over_env(self, settings_file, monkeypatch):
+    def test_e_resolver_env_precedence_over_settings(self, settings_file, monkeypatch):
         _write_settings(settings_file, REAL_KEY)
-        monkeypatch.setenv("TMDB_API_KEY", "env_key_should_lose")
-        assert _resolver()() == REAL_KEY, "settings.json 应优先于 env"
+        monkeypatch.setenv("TMDB_API_KEY", "env_key_should_win")
+        assert _resolver()() == "env_key_should_win", "env 应优先于 settings.json"
 
     def test_e_resolver_ignores_placeholder_and_empty(self, settings_file, monkeypatch):
         _write_settings(settings_file, "${TMDB_API_KEY}")

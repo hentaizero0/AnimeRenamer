@@ -32,10 +32,9 @@ async def lifespan(app: FastAPI):
     key = get_effective_tmdb_key()
     if key:
         os.environ["TMDB_API_KEY"] = key
-        logger.info("[STARTUP] Loaded TMDB API key: ****%s", key[-4:])
+        logger.info("[STARTUP] TMDB API key configured")
     else:
         logger.info("[STARTUP] No TMDB API key found in settings")
-    logger.info("[STARTUP] config.tmdb_api_key: %s...", config.tmdb_api_key[:20] if config.tmdb_api_key else "EMPTY")
     loop = asyncio.get_running_loop()
     watcher_observer = start_watcher(loop, queue_service=queue_service, key_resolver=get_effective_tmdb_key, persist_state=_save_state)
     try:
@@ -106,12 +105,12 @@ def _save_settings(settings: dict[str, str]) -> None:
 
 
 def get_effective_tmdb_key() -> str:
-    key = (_load_settings().get("tmdb_api_key") or "").strip()
-    if key and "*" not in key and key != "${TMDB_API_KEY}":
-        return key
     env_key = (os.environ.get("TMDB_API_KEY") or "").strip()
     if env_key and "*" not in env_key and env_key != "${TMDB_API_KEY}":
         return env_key
+    key = (_load_settings().get("tmdb_api_key") or "").strip()
+    if key and "*" not in key and key != "${TMDB_API_KEY}":
+        return key
     return ""
 
 @app.get("/api/stats")
