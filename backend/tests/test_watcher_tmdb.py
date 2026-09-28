@@ -48,6 +48,7 @@ async def test_tmdb_client_search_and_verify(monkeypatch):
                         "id": 100,
                         "name": "Frieren: Beyond Journey's End",
                         "original_name": "Sousou no Frieren",
+                        "backdrop_path": "/frieren-backdrop.jpg",
                         "origin_country": ["JP"],
                         "genre_ids": [16]
                     }
@@ -79,6 +80,7 @@ async def test_tmdb_client_search_and_verify(monkeypatch):
     assert len(results) == 1
     assert results[0].tmdb_id == 100
     assert results[0].name == "葬送的芙莉莲"
+    assert results[0].backdrop_path == "/frieren-backdrop.jpg"
     assert results[0].confidence > 0.5
     
     # Run verify episode
@@ -153,7 +155,8 @@ async def test_tmdb_async_resolve(monkeypatch, clean_queue):
                 original_name="Sousou no Frieren",
                 season_count=1,
                 confidence=0.95,
-                matched_season=1
+                matched_season=1,
+                backdrop_path="/frieren-backdrop.jpg",
             )
         ]
     monkeypatch.setattr(TmdbClient, "search_anime", mock_search_anime)
@@ -164,6 +167,35 @@ async def test_tmdb_async_resolve(monkeypatch, clean_queue):
     assert updated_job.override_title == "葬送的芙莉莲"
     assert updated_job.series_config is not None
     assert updated_job.series_config.tmdb_name == "葬送的芙莉莲"
+    assert updated_job.series_config.backdrop_path == "/frieren-backdrop.jpg"
+
+@pytest.mark.asyncio
+async def test_tmdb_backdrop_path_is_saved_for_configured_series(monkeypatch, tmp_path):
+    config = AppConfig(_env_file=None, tmdb_api_key="test_key")
+    series_db = SeriesDB(tmp_path / "series.yaml")
+    saved_config = SeriesConfig(tmdb_name="Frieren", tmdb_id=100)
+    series_db.add(saved_config)
+
+    job = BatchTriageJob(
+        id="configured-frieren", source_dir="Frieren",
+        items=[FileTriageItem(relative_path="Frieren/01.mkv", is_video=True)],
+        series_config=saved_config,
+    )
+    queue = QueueService()
+    queue.put(job)
+
+    async def get_backdrop(_self, _tmdb_id):
+        return "/frieren-backdrop.jpg"
+
+    monkeypatch.setattr(TmdbClient, "get_series_backdrop_path", get_backdrop)
+    await tmdb_async_resolve(
+        job.id, "Frieren", "Frieren", config, queue,
+        key_resolver=lambda: "fixture-key", series_db=series_db,
+    )
+
+    reloaded = SeriesDB(series_db.config_path)
+    assert job.series_config.backdrop_path == "/frieren-backdrop.jpg"
+    assert reloaded.get("Frieren").backdrop_path == "/frieren-backdrop.jpg"
 
 @pytest.mark.asyncio
 async def test_tmdb_then_auto_uses_latest_queued_job(monkeypatch, tmp_path):

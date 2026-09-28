@@ -1,5 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, ClassVar
+import re
 import httpx
 from rapidfuzz import fuzz
 
@@ -11,6 +12,8 @@ class TmdbMatch:
     season_count: int
     confidence: float
     matched_season: int | None = None
+    season_names: dict[int, str] = field(default_factory=dict)
+    backdrop_path: str | None = None
 
 class TmdbClient:
     _shared_clients: ClassVar[dict[tuple[str, tuple[tuple[str, str], ...]], httpx.AsyncClient]] = {}
@@ -74,6 +77,23 @@ class TmdbClient:
         except Exception:
             return False
 
+    async def get_series_backdrop_path(self, tmdb_id: int) -> str | None:
+        client = self._get_client()
+        try:
+            headers = self.headers if "Authorization" in self.headers else {"accept": "application/json"}
+            resp = await client.get(
+                f"{self.base_url}/tv/{tmdb_id}",
+                params=self.params,
+                headers=headers,
+                timeout=10.0,
+            )
+            if resp.status_code != 200:
+                return None
+            path = resp.json().get("backdrop_path")
+            return path if isinstance(path, str) and path.startswith("/") else None
+        except Exception:
+            return None
+
     async def _search_once(self, client: httpx.AsyncClient, title: str, language: str) -> list[TmdbMatch]:
         try:
             # Search WITHOUT language so TMDB matches English/Romaji queries accurately
@@ -103,19 +123,30 @@ class TmdbClient:
                     headers=headers,
                     timeout=10.0
                 )
+                # Fetch details WITHOUT language to get English/Romaji season names
+                details_resp_en = await client.get(
+                    f"{self.base_url}/tv/{tmdb_id}",
+                    params={**self.params, "append_to_response": "alternative_titles"},
+                    headers=headers,
+                    timeout=10.0
+                )
                 final_name = search_matched_name
                 details = {}
+                details_en = {}
                 if details_resp.status_code == 200:
                     details = details_resp.json()
                     # Final name to save will be the localized detail name (Chinese)
                     if details.get("name"):
                         final_name = details["name"]
+                if details_resp_en.status_code == 200:
+                    details_en = details_resp_en.json()
                     
                 season_count = details.get("number_of_seasons", 1)
                 
                 # Match confidence against the name that search returned (usually English)
                 sim1 = fuzz.ratio(title.lower(), search_matched_name.lower()) / 100.0
                 sim2 = fuzz.ratio(title.lower(), original_name.lower()) / 100.0
+                localized_sim = fuzz.ratio(title.lower(), details.get("name", "").lower()) / 100.0
                 
                 # Check fuzzy match against all alternative titles
                 best_alt_sim = 0.0
@@ -129,19 +160,41 @@ class TmdbClient:
                 if best_alt_sim > 0.85:
                     best_alt_sim = 0.95
                     
-                base_conf = max(sim1, sim2, best_alt_sim) * 0.7
+                base_conf = max(sim1, sim2, localized_sim, best_alt_sim) * 0.7
                 if base_conf > 0.6:  # Uncap it a bit if it was a strong alias match
                     base_conf = max(base_conf, best_alt_sim)
                 
                 # Check if the title matches a specific season name better
                 matched_season = None
                 best_season_sim = 0.0
+
+                all_seasons = details.get("seasons", []) + details_en.get("seasons", [])
+                season_names = {
+                    season["season_number"]: season["name"]
+                    for season in details_en.get("seasons", [])
+                    if isinstance(season.get("season_number"), int)
+                    and season["season_number"] > 0 and season.get("name")
+                }
                 for season in details.get("seasons", []):
+                    number, name = season.get("season_number"), season.get("name")
+                    if isinstance(number, int) and number > 0 and name and (
+                        number not in season_names or not re.fullmatch(r"(?i:season)\s*\d+|第\s*[一二三四五六七八九十\d]+\s*季", name)
+                    ):
+                        season_names[number] = name
+
+                for season in all_seasons:
                     s_name = season.get("name", "")
                     s_num = season.get("season_number", 0)
-                    if s_num == 0:  # Skip Specials
+                    if s_num == 0 or not s_name:  # Skip Specials
                         continue
-                    s_sim = fuzz.ratio(title.lower(), s_name.lower()) / 100.0
+                    s_sim_ratio = fuzz.ratio(title.lower(), s_name.lower()) / 100.0
+                    s_sim_token = fuzz.token_set_ratio(title.lower(), s_name.lower()) / 100.0
+                    s_sim = max(s_sim_ratio, s_sim_token)
+
+                    if len(s_name) > 4:
+                        s_sim_partial = fuzz.partial_ratio(title.lower(), s_name.lower()) / 100.0
+                        s_sim = max(s_sim, s_sim_partial)
+
                     if s_sim > best_season_sim and s_sim > 0.8:
                         best_season_sim = s_sim
                         matched_season = s_num
@@ -164,7 +217,9 @@ class TmdbClient:
                     original_name=original_name,
                     season_count=season_count,
                     confidence=conf,
-                    matched_season=matched_season
+                    matched_season=matched_season,
+                    season_names=season_names,
+                    backdrop_path=item.get("backdrop_path") or details.get("backdrop_path"),
                 ))
             return results
         except Exception as e:

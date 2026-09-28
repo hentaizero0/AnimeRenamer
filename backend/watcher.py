@@ -16,8 +16,36 @@ from backend.services.queue_service import QueueService, default_queue_service
 logger = logging.getLogger(__name__)
 
 
-async def tmdb_async_resolve(job_id: str, search_title: str, dir_name: str, config, queue_service: QueueService | None = None, key_resolver=None):
+async def tmdb_async_resolve(job_id: str, search_title: str, dir_name: str, config, queue_service: QueueService | None = None, key_resolver=None, series_db: SeriesDB | None = None):
     queue_state = queue_service or default_queue_service
+    queued_job = queue_state.get(job_id)
+    if queued_job is None:
+        return
+
+    if queued_job.series_config is not None:
+        series_config = queued_job.series_config
+        if series_config.tmdb_id is None or series_config.backdrop_path:
+            return
+        api_key = key_resolver() if key_resolver else (config.tmdb_api_key or "")
+        if not api_key:
+            return
+        client = TmdbClient(api_key)
+        backdrop_path = await client.get_series_backdrop_path(series_config.tmdb_id)
+        current_job = queue_state.get(job_id)
+        if current_job is not queued_job or current_job.series_config is not series_config or not backdrop_path:
+            return
+        series_config.backdrop_path = backdrop_path
+        if series_db is not None:
+            updated = False
+            for saved_config in series_db._series.values():
+                if saved_config.tmdb_id == series_config.tmdb_id:
+                    saved_config.backdrop_path = backdrop_path
+                    updated = True
+            if updated:
+                series_db.save()
+        return
+
+    title_before_lookup = queued_job.override_title
     api_key = key_resolver() if key_resolver else (config.tmdb_api_key or "")
     if not api_key:
         logger.info("[TMDB] Skipping TMDB resolve for %s: API key is empty", job_id)
@@ -34,11 +62,10 @@ async def tmdb_async_resolve(job_id: str, search_title: str, dir_name: str, conf
         needs_fallback = not results or results[0].confidence <= 0.6 or results[0].matched_season is None
         if needs_fallback:
             import re
-            clean_dir = dir_name
-            if clean_dir.startswith("[") or clean_dir.startswith("【"):
-                brackets = re.findall(r'\[([^\]]+)\]|【([^】]+)】', clean_dir)
-                if len(brackets) >= 2:
-                    clean_dir = brackets[1][0] or brackets[1][1]
+            # ponytail: mixed letter/digit suffixes after a season look like release tags;
+            # use explicit metadata if an official title uses that form.
+            clean_dir = re.sub(r"(?i)(\b(?:S\d{1,2}|Season\s*\d+))\s*\[(?=[^]]*\d)(?=[^]]*[a-z])[^]]+\]\s*$", r"\1", dir_name)
+            clean_dir = parse_file(clean_dir).detected_title or clean_dir
             
             fallback_results = await client.search_anime(clean_dir)
             if fallback_results:
@@ -58,16 +85,26 @@ async def tmdb_async_resolve(job_id: str, search_title: str, dir_name: str, conf
     # We only override if confidence is reasonably high
     if best_match.confidence > 0.6:
         job = queue_state.get(job_id)
-        if job is not None:
+        if job is queued_job and job.series_config is None:
+            parsed_season = next(
+                (it.parsed.season for it in job.items
+                 if it.is_video and not it.ignored and it.parsed and it.parsed.season is not None),
+                None,
+            )
+            season_conflict = parsed_season is not None and best_match.matched_season is not None and parsed_season != best_match.matched_season
+            selected_season = parsed_season or best_match.matched_season or 1
             # Create a virtual SeriesConfig for it
             sc = SeriesConfig(
-                mode=job.default_mode or "confirm",
+                mode="confirm" if season_conflict else job.default_mode or "confirm",
                 tmdb_name=best_match.name,
                 tmdb_id=best_match.tmdb_id,
-                season=best_match.matched_season or 1 # Can be further refined by verifying episodes
+                backdrop_path=best_match.backdrop_path,
+                season=selected_season,
+                season_title=best_match.season_names.get(selected_season),
             )
             job.series_config = sc
-            job.override_title = best_match.name
+            if job.override_title is None and title_before_lookup is None:
+                job.override_title = best_match.name
             logger.info("[TMDB] Resolved '%s' -> '%s'", search_title, best_match.name)
 
 def get_local_config(dir_path: Path) -> dict | None:
@@ -161,7 +198,16 @@ def find_all_anime_dirs(download_dir: Path) -> list[tuple[Path, str]]:
                 continue
                 
             child_name_lower = child.name.lower()
-            if "season" in child_name_lower or any(e in child_name_lower for e in EXTRA_DIR_KEYWORDS) or child_name_lower in IGNORED_DIR_NAMES:
+            # Only exact match or simple combinations for root anime dirs to avoid skipping "[...TV全集+SP]"
+            import re
+            is_extra_dir = child_name_lower in EXTRA_DIR_KEYWORDS or child_name_lower in IGNORED_DIR_NAMES
+            if not is_extra_dir and len(child_name_lower) < 15:
+                # for short names like "ncop&nced"
+                words_in_name = set(re.findall(r'[a-z0-9]+', child_name_lower))
+                if all(w in EXTRA_DIR_KEYWORDS or w == "and" for w in words_in_name) and words_in_name:
+                    is_extra_dir = True
+
+            if "season" in child_name_lower or is_extra_dir:
                 continue
             
             if is_download_root(child):
@@ -247,6 +293,10 @@ def process_directory(dir_path: Path, config, series_db, strict: bool = False, d
         status=TriageStatus.pending,
         default_mode=default_mode
     )
+    if job.has_mixed_seasons:
+        job.status = TriageStatus.ignored
+        job.ignore_reason = "mixed_seasons"
+        return job
     
     # Try to find series config
     matched_entry = None
@@ -301,7 +351,10 @@ class DownloadDirHandler(FileSystemEventHandler):
             # Preserve user edits and TMDB resolutions across refreshes
             job.series_config = existing_job.series_config
             job.override_title = existing_job.override_title
-            job.ignore_reason = existing_job.ignore_reason
+            job.override_season = existing_job.override_season
+            job.override_episode = existing_job.override_episode
+            if job.ignore_reason is None:
+                job.ignore_reason = existing_job.ignore_reason
             
             # Preserve ignored status of individual files
             existing_ignores = {it.relative_path: it.ignored for it in existing_job.items}
@@ -315,19 +368,26 @@ class DownloadDirHandler(FileSystemEventHandler):
             
         if mode == "auto" and job.status == TriageStatus.pending:
             self.loop.create_task(self._tmdb_then_auto(job))
-        elif not job.series_config and job.effective_title:
+        elif (not job.series_config and job.effective_title) or (
+            job.series_config and job.series_config.tmdb_id and not job.series_config.backdrop_path
+        ):
             try:
                 dir_name = Path(job.source_dir).name
-                self.loop.create_task(tmdb_async_resolve(job.id, job.effective_title, dir_name, self.config, self.queue_service, self.key_resolver))
+                self.loop.create_task(tmdb_async_resolve(job.id, job.effective_title, dir_name, self.config, self.queue_service, self.key_resolver, self.series_db))
             except Exception as e:
                 logger.warning("Failed to dispatch TMDB task: %s", e)
 
     async def _tmdb_then_auto(self, job):
         if not job.series_config and job.effective_title:
             dir_name = Path(job.source_dir).name
-            await tmdb_async_resolve(job.id, job.effective_title, dir_name, self.config, self.queue_service, self.key_resolver)
+            await tmdb_async_resolve(job.id, job.effective_title, dir_name, self.config, self.queue_service, self.key_resolver, self.series_db)
+        elif job.series_config and job.series_config.tmdb_id and not job.series_config.backdrop_path:
+            dir_name = Path(job.source_dir).name
+            self.loop.create_task(tmdb_async_resolve(job.id, job.effective_title, dir_name, self.config, self.queue_service, self.key_resolver, self.series_db))
 
         current_job = self.queue_service.get(job.id) or job
+        if current_job.status != TriageStatus.pending or resolve_mode(current_job, self.config) != "auto":
+            return
         from backend.triage import execute_triage_job
 
         res = await execute_triage_job(current_job, self.config)

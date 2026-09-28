@@ -37,7 +37,7 @@ _JUNK_TAGS: list[re.Pattern[str]] = [p for p in [
     # Whole bracket blocks that are pure tech specs (contains any codec/resolution keyword)
     re.compile(
         r"\[[^\]]*"
-        r"(?:SRTx?\d*|FLACx?\d*|HEVC|AVC|1080p|720p|480p|BDRip|WebRip|WEB-DL|10.?bit)"
+        r"(?:SRTx?\d*|FLACx?\d*|HEVC|AVC|x26[45]|OPUS|1080p|720p|480p|BDRip|WebRip|WEB-DL|10.?bit)"
         r"[^\]]*\]",
         re.IGNORECASE,
     ),
@@ -78,6 +78,7 @@ _JUNK_TAGS: list[re.Pattern[str]] = [p for p in [
     # Language/subtitle tags
     re.compile(r"\b(?:CHT|CHS|JPN|ENG|MULTI|Sub|Dub)\b", re.IGNORECASE),
     re.compile(r"简繁外挂|简繁|日中|双语", re.IGNORECASE),
+    re.compile(r"\[(?:Baha|巴哈姆特)\]|【(?:Baha|巴哈姆特)】", re.IGNORECASE),
     # Hash/CRC tags — [A1B2C3D4]
     re.compile(r"\[[0-9A-Fa-f]{6,8}\]"),
     # Bare parenthetical junk: (v2), (BD), (END), (FINAL)
@@ -128,8 +129,8 @@ _SXEXX_RE = re.compile(r"\bS(\d{1,2})E(\d{1,4})\b", re.IGNORECASE)
 
 # Dash separator: " - 03" or " - 003"
 _EP_DASH_RE = re.compile(r"(?:^|\s)-\s*(\d{1,4})(?!\d)")
-# Bracketed episode: [03] or [E03]
-_EP_BRACKET_RE = re.compile(r"\[(?:E|EP|Ep)?(\d{1,4})\]", re.IGNORECASE)
+# Bracketed episode: [03] or [E03] or [03v2] or [50END]
+_EP_BRACKET_RE = re.compile(r"\[(?!(?:19|20)\d{2}(?:\s*(?:v\d+|END|FINAL))?\])(?:E|EP|Ep)?(\d{1,4})(?:\s*(?:v\d+|END|FINAL))?\]", re.IGNORECASE)
 # Chinese episode marker: 第02话 第002集
 _EP_CN_RE = re.compile(r"第(\d{1,4})[话集]", re.UNICODE)
 # E / EP prefix: E03, EP03
@@ -165,6 +166,8 @@ def _extract_fansub(stem: str) -> tuple[str, str | None]:
     if m:
         group = (m.group("sq") or m.group("dq") or "").strip()
         remaining = stem[m.end():]
+        if group.lower() in {"baha", "巴哈姆特"}:
+            return remaining, None
         return remaining, group or None
     return stem, None
 
@@ -492,9 +495,12 @@ def _parse_stem(stem: str, ext: str) -> ParsedAnime:  # noqa: C901 (complexity O
     # 0. 优先提取 SxxExx 联合格式（如 S02E01）
     sxex_match = _SXEXX_RE.search(working)
     if sxex_match:
+        # ponytail: a bare year before SxxExx is treated as release metadata;
+        # use an explicit title override if an official title ends in that year.
+        prefix = re.sub(r"\s+(?:19|20)\d{2}\s*$", " ", working[:sxex_match.start()])
         season = int(sxex_match.group(1))
         episode = int(sxex_match.group(2))
-        working = working[:sxex_match.start()] + working[sxex_match.end():]
+        working = prefix + working[sxex_match.end():]
         season_flags = ["sxex"]
         ep_flags = ["sxex"]
     else:

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="AnimeRenamer v2 — Intelligent anime file renaming dashboard with confidence scoring and queue management." />
   <title>AnimeRenamer v2 — Dashboard</title>
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/style.css?v=20260928-theme7" />
   <!-- Preconnect for Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -90,7 +90,7 @@
             </div>
           </div>
           <div class="stat-card processed">
-            <div class="stat-icon" aria-hidden="true">✅</div>
+            <div class="stat-icon" aria-hidden="true">✓</div>
             <div>
               <div class="stat-value" id="stat-processed">—</div>
               <div class="stat-label">今日已处理</div>
@@ -109,10 +109,10 @@
         <div class="section-header">
           <h2 class="section-title">待处理队列</h2>
         </div>
-        <div class="pending-cards-grid" id="pending-cards" role="list" aria-label="Pending rename queue">
+        <div class="pending-cards-grid" id="pending-cards" role="region" aria-label="Pending rename queue">
           <!-- JS renders cards here -->
           <div class="empty-state">
-            <div class="empty-icon">✅</div>
+            <div class="empty-icon">✓</div>
             <p>暂无需要手动确认的队列</p>
           </div>
         </div>
@@ -285,6 +285,17 @@
             </div>
           </div>
         </div>
+
+        <div class="card" style="margin-top:16px;">
+          <div class="card-body">
+            <h3 style="margin-top:0">数据来源与鸣谢</h3>
+            <a href="https://www.themoviedb.org" target="_blank" rel="noopener noreferrer" aria-label="The Movie Database (TMDB)">
+              <img src="assets/tmdb-logo.svg" alt="The Movie Database (TMDB)" style="display:block;width:100px;height:auto;margin:12px 0">
+            </a>
+            <p style="color:var(--text-muted);font-size:12px;margin:0">本产品使用 TMDB API，但不由 TMDB 背书或认证。</p>
+            <p style="color:var(--text-muted);font-size:12px;margin:4px 0 0">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
+          </div>
+        </div>
       </section>
 
 
@@ -326,7 +337,7 @@
 
       <div class="modal-footer">
         <button class="btn btn-ghost" id="modal-cancel">取消</button>
-        <button class="btn btn-accent" id="modal-save">✅ 保存并确认</button>
+        <button class="btn btn-accent" id="modal-save">✓ 保存并确认</button>
       </div>
     </div>
   </div>
@@ -366,7 +377,7 @@
   <!-- ── Scripts ─────────────────────────────────────────────────────────── -->
   <script src="js/data.js"></script>
   <script src="js/api.js"></script>
-  <script src="js/app.js"></script>
+  <script src="js/app.js?v=20260928-5"></script>
 
 </body>
 </html>

@@ -31,6 +31,10 @@ regression_downloads/
 regression_target/
 regression_anime/
 
+# ── Playwright artifacts ─────────────────────────────────
+playwright-data/*
+!playwright-data/.gitkeep
+
 # ── Runtime Logs ─────────────────────────────────────────
 *.log
 app.log

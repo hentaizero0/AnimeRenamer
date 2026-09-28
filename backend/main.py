@@ -48,6 +48,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AnimeRenamer API", lifespan=lifespan)
 
+@app.middleware("http")
+async def revalidate_frontend_assets(request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.endswith((".html", ".js", ".css")):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -183,6 +190,9 @@ async def get_queue() -> list[dict[str, Any]]:
                 "detected_title": final_title or "Unknown",
                 "original_parsed_title": original_parsed,
                 "season": t_season,
+                "season_title": j.effective_season_title,
+                "tmdb_id": j.series_config.tmdb_id if j.series_config else None,
+                "backdrop_path": j.series_config.backdrop_path if j.series_config else None,
                 "video_count": video_count,
                 "has_subs": has_subs,
                 "episode_set": ep_set,
@@ -252,6 +262,8 @@ async def confirm_job(job_id: str, payload: dict[str, Any] = None) -> TriageResu
         raise HTTPException(status_code=404, detail="Job not found")
     
     job = queue[job_id]
+    if job.has_mixed_seasons:
+        raise HTTPException(status_code=409, detail="Mixed seasons require separate batches")
     
     # ponytail: Apply user edits if provided
     if payload:
@@ -292,6 +304,8 @@ async def preview_job(job_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Job not found")
     
     job = queue[job_id]
+    if job.has_mixed_seasons:
+        raise HTTPException(status_code=409, detail="Mixed seasons require separate batches")
     anime_name = job.effective_title
     season = job.effective_season
     season_str = f"{season:02d}"
@@ -344,6 +358,8 @@ async def preview_job(job_id: str) -> dict:
         "job_id": job_id,
         "anime_name": anime_name,
         "season": season,
+        "season_title": job.effective_season_title,
+        "tmdb_id": job.series_config.tmdb_id if job.series_config else None,
         "renamed": renamed,
         "preserved": preserved,
     }

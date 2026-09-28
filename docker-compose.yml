@@ -10,9 +10,7 @@ services:
       - PGID=${PGID:-100}
       - TMDB_API_KEY=${TMDB_API_KEY:-}
     volumes:
-      - ${HOST_DOWNLOAD_DIR:-/mnt/user/hentaidisk/Downloads}:/downloads
-      - ${HOST_STORAGE_DIR:-/mnt/user/hentaidisk/video/anime}:/anime
-      - ${HOST_JELLYFIN_LINK_DIR:-/mnt/user/hentaidisk/video/link}:/jellyfin
+      - ${HOST_MEDIA_VAULT_DIR:-/mnt/user/hentaidisk/media_vault}:/vault
       - ./config:/app/config
       - ./logs:/app/logs
       - ./state.json:/app/state.json

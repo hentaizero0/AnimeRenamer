@@ -3,11 +3,12 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-$(pwd)}"
 APP_PORT="${APP_PORT:-8765}"
-HOST_DOWNLOAD_DIR="${HOST_DOWNLOAD_DIR:-/mnt/user/hentaidisk/Downloads}"
-HOST_STORAGE_DIR="${HOST_STORAGE_DIR:-/mnt/user/hentaidisk/video/anime}"
-HOST_JELLYFIN_LINK_DIR="${HOST_JELLYFIN_LINK_DIR:-/mnt/user/hentaidisk/video/link}"
-HOST_JELLYFIN_COLLECT_DIR="${HOST_JELLYFIN_COLLECT_DIR:-/mnt/user/hentaidisk/video/link/anime/动漫}"
-HOST_JELLYFIN_AIRING_DIR="${HOST_JELLYFIN_AIRING_DIR:-/mnt/user/hentaidisk/video/link/Bangumi}"
+HOST_MEDIA_VAULT_DIR="${HOST_MEDIA_VAULT_DIR:-/mnt/user/hentaidisk/media_vault}"
+HOST_DOWNLOAD_DIR="${HOST_DOWNLOAD_DIR:-${HOST_MEDIA_VAULT_DIR}/Downloads}"
+HOST_STORAGE_DIR="${HOST_STORAGE_DIR:-${HOST_MEDIA_VAULT_DIR}/video/anime}"
+HOST_JELLYFIN_LINK_DIR="${HOST_JELLYFIN_LINK_DIR:-${HOST_MEDIA_VAULT_DIR}/video/link}"
+HOST_JELLYFIN_COLLECT_DIR="${HOST_JELLYFIN_COLLECT_DIR:-${HOST_MEDIA_VAULT_DIR}/video/link/anime/动漫}"
+HOST_JELLYFIN_AIRING_DIR="${HOST_JELLYFIN_AIRING_DIR:-${HOST_MEDIA_VAULT_DIR}/video/link/Bangumi}"
 HOST_JELLYFIN_MOVIE_DIR="${HOST_JELLYFIN_MOVIE_DIR:-}"
 TMDB_API_KEY="${TMDB_API_KEY:-}"
 FORCE_CONFIG="${FORCE_CONFIG:-0}"
@@ -20,6 +21,7 @@ Usage: install_unraid.sh [--app-dir PATH] [--port N] [--tmdb-key KEY] [--skip-up
 Environment overrides:
   APP_DIR
   APP_PORT
+  HOST_MEDIA_VAULT_DIR
   HOST_DOWNLOAD_DIR
   HOST_STORAGE_DIR
   HOST_JELLYFIN_LINK_DIR
@@ -75,7 +77,7 @@ for required in docker-compose.yml Dockerfile config frontend backend docker-ent
   fi
 done
 
-for path in "${HOST_DOWNLOAD_DIR}" "${HOST_STORAGE_DIR}" "${HOST_JELLYFIN_LINK_DIR}"; do
+for path in "${HOST_MEDIA_VAULT_DIR}" "${HOST_DOWNLOAD_DIR}" "${HOST_STORAGE_DIR}" "${HOST_JELLYFIN_LINK_DIR}"; do
   if [ ! -d "${path}" ]; then
     echo "Missing required directory: ${path}" >&2
     exit 1
@@ -98,8 +100,8 @@ if [ -z "${TMDB_API_KEY}" ]; then
   exit 1
 fi
 
-DETECTED_UID="$(stat -c '%u' "${HOST_DOWNLOAD_DIR}")"
-DETECTED_GID="$(stat -c '%g' "${HOST_DOWNLOAD_DIR}")"
+DETECTED_UID="$(stat -c '%u' "${HOST_MEDIA_VAULT_DIR}")"
+DETECTED_GID="$(stat -c '%g' "${HOST_MEDIA_VAULT_DIR}")"
 if [ "${DETECTED_UID}" = "0" ]; then
   DETECTED_UID=99
 fi
@@ -119,6 +121,7 @@ APP_PORT=${APP_PORT}
 PUID=${PUID}
 PGID=${PGID}
 TMDB_API_KEY=${TMDB_API_KEY}
+HOST_MEDIA_VAULT_DIR=${HOST_MEDIA_VAULT_DIR}
 HOST_DOWNLOAD_DIR=${HOST_DOWNLOAD_DIR}
 HOST_STORAGE_DIR=${HOST_STORAGE_DIR}
 HOST_JELLYFIN_LINK_DIR=${HOST_JELLYFIN_LINK_DIR}
@@ -148,10 +151,10 @@ if [ "${NEEDS_CONFIG_WRITE}" = "1" ]; then
   cat > "${CONFIG_PATH}" <<'EOF'
 settings:
   default_mode: confirm
-  download_dir: /downloads
-  storage_dir: /anime
-  jellyfin_airing_dir: /jellyfin/Bangumi
-  jellyfin_collect_dir: /jellyfin/anime/动漫
+  download_dir: /vault/Downloads
+  storage_dir: /vault/video/anime
+  jellyfin_airing_dir: /vault/video/link/Bangumi
+  jellyfin_collect_dir: /vault/video/link/anime/动漫
   tmdb_api_key: ${TMDB_API_KEY}
 
 series: {}
@@ -161,6 +164,7 @@ fi
 echo "APP_DIR=${APP_DIR}"
 echo "APP_PORT=${APP_PORT}"
 echo "PUID:PGID=${PUID}:${PGID}"
+echo "MEDIA_VAULT=${HOST_MEDIA_VAULT_DIR}"
 echo "DOWNLOAD=${HOST_DOWNLOAD_DIR}"
 echo "STORAGE=${HOST_STORAGE_DIR}"
 echo "JELLYFIN_LINK=${HOST_JELLYFIN_LINK_DIR}"

@@ -75,6 +75,22 @@ def test_get_pending_with_job(client):
     assert data[0]["id"] == "job123"
     assert data[0]["detected_title"] == "Frieren"
 
+def test_get_pending_includes_tmdb_backdrop_path(client):
+    item = FileTriageItem(
+        relative_path="Frieren/Frieren - 01.mkv",
+        parsed=ParsedAnime(raw_filename="Frieren - 01.mkv", detected_title="Frieren", season=1, episode=1, extension="mkv", confidence=0.9),
+        is_video=True,
+    )
+    job = BatchTriageJob(
+        id="job_backdrop", source_dir="Frieren", items=[item], status=TriageStatus.pending,
+        series_config=SeriesConfig(tmdb_name="Frieren", tmdb_id=100, backdrop_path="/frieren-backdrop.jpg"),
+    )
+    queue[job.id] = job
+
+    response = client.get("/api/pending")
+    assert response.status_code == 200
+    assert response.json()[0]["backdrop_path"] == "/frieren-backdrop.jpg"
+
 def test_get_ignored_list(client):
     parsed = ParsedAnime(raw_filename="unknown.txt", detected_title="unknown", season=None, episode=None, extension="txt", confidence=0.1)
     item = FileTriageItem(relative_path="unknown.txt", parsed=parsed, is_video=False)

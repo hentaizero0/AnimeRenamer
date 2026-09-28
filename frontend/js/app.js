@@ -9,7 +9,10 @@ let editModal = null;
 // ── Helpers// ───────────────────────────────────────────────────────────────────
 
 function timeAgo(isoString) {
-  const diff = (Date.now() - new Date(isoString).getTime()) / 1000;
+  if (isoString === 'Just now') return '刚刚';
+  const timestamp = new Date(isoString).getTime();
+  if (!Number.isFinite(timestamp)) return '时间未知';
+  const diff = (Date.now() - timestamp) / 1000;
   if (diff < 60) return `${Math.round(diff)}s ago`;
   if (diff < 3600) return `${Math.round(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.round(diff / 3600)}h ago`;
@@ -46,6 +49,29 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function tmdbBackdropUrl(path) {
+  return /^\/[A-Za-z0-9._-]+\.(?:jpe?g|png|webp)$/i.test(String(path || ''))
+    ? `https://image.tmdb.org/t/p/w500${path}`
+    : null;
+}
+
+function renderTmdbTags(item) {
+  const id = Number(item.tmdb_id);
+  const url = Number.isSafeInteger(id) && id > 0 ? `https://www.themoviedb.org/tv/${id}` : null;
+  const season = Number(item.season);
+  const subtitle = String(item.season_title || '').trim();
+  const showSubtitle = subtitle && !/^(?:season\s*\d+|第\s*[一二三四五六七八九十\d]+\s*季)$/i.test(subtitle);
+  const seasonUrl = url && Number.isSafeInteger(season) && season > 0 ? `${url}/season/${season}?language=zh-CN` : null;
+  return `
+    ${showSubtitle ? (seasonUrl
+      ? `<a class="episode-tag tmdb-link" href="${seasonUrl}" target="_blank" rel="noopener noreferrer">【${escapeHtml(subtitle)}】</a>`
+      : `<span class="episode-tag">【${escapeHtml(subtitle)}】</span>`) : ''}
+    ${url
+      ? `<a class="episode-tag tmdb-link" href="${url}?language=zh-CN" target="_blank" rel="noopener noreferrer">TMDB #${id} ↗</a>`
+      : '<span class="episode-tag">TMDB 未匹配</span>'}
+  `;
 }
 
 // ── Toast notifications ───────────────────────────────────────────────────────
@@ -113,11 +139,30 @@ async function renderDashboard() {
   if (pendingConfirm.length === 0) {
     pendingEl.innerHTML = `
       <div class="empty-state">
-        <div class="empty-icon">✅</div>
+        <div class="empty-icon">✓</div>
         <p>暂无需要手动确认的队列</p>
       </div>`;
   } else {
-    pendingEl.innerHTML = pendingConfirm.map(item => renderPendingCard(item)).join('');
+    const groups = new Map();
+    pendingConfirm.forEach(item => {
+      const title = String(item.detected_title || item.original_parsed_title || '未识别标题').trim().replace(/\s+/g, ' ');
+      if (!groups.has(title)) groups.set(title, []);
+      groups.get(title).push(item);
+    });
+    pendingEl.innerHTML = [...groups].map(([title, items]) => items.length === 1
+      ? renderPendingCard(items[0])
+      : `
+        <div class="anime-stack" data-count="${items.length}" role="group" aria-label="${escapeHtml(title)}，${items.length} 张待处理卡片">
+          <span class="anime-stack-layer anime-stack-layer-back" aria-hidden="true"></span>
+          ${items.length > 2 ? '<span class="anime-stack-layer anime-stack-layer-front" aria-hidden="true"></span>' : ''}
+          <div class="anime-stack-cards">
+            <div class="anime-stack-primary">${renderPendingCard(items[0], items.length)}</div>
+            <div class="anime-stack-extras" aria-hidden="true" inert>
+              <div class="anime-stack-extra-grid">${items.slice(1).map(item => renderPendingCard(item)).join('')}</div>
+            </div>
+          </div>
+        </div>
+    `).join('');
     attachCardListeners(pendingEl);
   }
 
@@ -160,22 +205,21 @@ async function renderDashboard() {
   `).join('');
 }
 
-function renderPendingCard(item) {
+function renderPendingCard(item, stackCount = 1) {
   const pct = Math.round(item.confidence * 100);
   const color = confidenceColor(item.confidence);
   const clsLabel = confidenceLabel(item.confidence);
+  const backdropUrl = tmdbBackdropUrl(item.backdrop_path);
   const activeConflicts = item.duplicates ? Object.keys(item.duplicates).filter(ep => {
     const activeFiles = item.duplicates[ep].filter(f => !f.ignored);
     return activeFiles.length >= 2;
   }) : [];
   return `
-    <div class="pending-card" data-id="${item.id}" onclick="handleCardClick(event, '${item.id}')">
+    <div class="pending-card${backdropUrl ? ' has-backdrop' : ''}" data-id="${item.id}" onclick="handleCardClick(event, '${item.id}')">
+      ${backdropUrl ? `<img class="card-backdrop" src="${escapeHtml(backdropUrl)}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : ''}
       <div class="card-header">
-        <div class="card-badges">
-          ${modeBadge(item.mode)}
-          <span class="badge badge-gray">S${padNum(item.season)} E${padNum(item.episode)}</span>
-        </div>
         <span class="card-size">${escapeHtml(item.source_size)}</span>
+        ${stackCount > 1 ? `<button class="btn btn-ghost btn-sm anime-stack-toggle" type="button" aria-expanded="false" onclick="event.stopPropagation(); toggleAnimeStack(this.closest('.anime-stack'))">展开 ${stackCount} 张</button>` : ''}
       </div>
 
       <div class="card-original">
@@ -198,14 +242,15 @@ function renderPendingCard(item) {
       <div class="tags-container" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
         <span class="episode-tag">第 ${item.season} 季</span>
         <span class="episode-tag">共 ${item.video_count} 集</span>
-        ${item.has_subs ? '<span class="episode-tag" style="background:rgba(234,179,8,0.15);color:#facc15;">外挂字幕</span>' : ''}
+        ${renderTmdbTags(item)}
+        ${item.has_subs ? '<span class="episode-tag" style="background:#fff4df;color:#8a5700;border-color:#f4dfb5;">外挂字幕</span>' : ''}
       </div>
       
       ${activeConflicts.length > 0
-        ? `<div class="merge-hint" style="background:rgba(239,68,68,0.1);border-color:rgba(239,68,68,0.2);color:#fca5a5;">
+        ? `<div class="merge-hint" style="background:#fff0ef;border-color:#f2d0cd;color:#ad3939;">
              <span class="merge-icon">⚠️</span>
              <span>发现冲突多版本: 第 ${activeConflicts.join(', ')} 集</span>
-             <button class="btn btn-ghost" style="padding:2px 8px;font-size:12px;margin-left:auto;color:#fca5a5;border:1px solid rgba(239,68,68,0.3);" onclick="event.stopPropagation(); window.openConflictModal('${item.id}')">解决冲突</button>
+             <button class="btn btn-ghost" style="padding:2px 8px;font-size:12px;margin-left:auto;color:#ad3939;border:1px solid #f2d0cd;" onclick="event.stopPropagation(); window.openConflictModal('${item.id}')">解决冲突</button>
            </div>`
         : ''
       }
@@ -242,7 +287,7 @@ function renderPendingCard(item) {
 
       <div class="card-actions">
         <button class="btn btn-success btn-confirm" data-id="${item.id}" title="${activeConflicts.length > 0 ? '请先解决冲突' : '确认分类并移动'}" ${activeConflicts.length > 0 ? 'disabled' : ''}>
-          ✅ 确认
+          ✓ 确认
         </button>
         <button class="btn btn-secondary btn-edit" data-id="${item.id}" title="Edit metadata">
           ✏️ 编辑
@@ -254,13 +299,30 @@ function renderPendingCard(item) {
     </div>`;
 }
 
+function toggleAnimeStack(stack) {
+  if (!stack) return;
+  const expanded = stack.classList.toggle('expanded');
+  const toggle = stack.querySelector('.anime-stack-toggle');
+  const extras = stack.querySelector('.anime-stack-extras');
+  toggle.setAttribute('aria-expanded', String(expanded));
+  toggle.textContent = expanded ? '收起卡片' : `展开 ${stack.dataset.count} 张`;
+  extras.inert = !expanded;
+  extras.setAttribute('aria-hidden', String(!expanded));
+}
+
 function handleCardClick(event, jobId) {
-  // Ignore clicks on buttons
-  if (event.target.closest('button')) return;
+  // Ignore clicks on buttons and external links
+  if (event.target.closest('button, a')) return;
   
   // Ignore if user is selecting text
   const selection = window.getSelection();
   if (selection && selection.toString().length > 0) {
+    return;
+  }
+
+  const stack = event.currentTarget.closest('.anime-stack');
+  if (stack && !stack.classList.contains('expanded')) {
+    toggleAnimeStack(stack);
     return;
   }
   
@@ -334,8 +396,8 @@ window.openConflictModal = function(jobId) {
   let html = '';
   
   for (const [ep, files] of Object.entries(item.duplicates)) {
-    html += `<div style="background:rgba(255,255,255,0.02); padding: 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">`;
-    html += `<h3 style="margin-top:0;margin-bottom:8px;font-size:14px;color:#cbd5e1;">第 ${ep} 集 的多个版本</h3>`;
+    html += `<div style="background:var(--bg-soft); padding: 12px; border-radius: 6px; border: 1px solid var(--border);">`;
+    html += `<h3 style="margin-top:0;margin-bottom:8px;font-size:14px;color:var(--text-primary);">第 ${ep} 集 的多个版本</h3>`;
     html += `<div style="display:flex; flex-direction:column; gap:6px;">`;
     
     for (const f of files) {
@@ -343,7 +405,7 @@ window.openConflictModal = function(jobId) {
       html += `
         <div style="display:flex; align-items:center; gap:8px;">
           <input type="checkbox" id="chk-${f.index}" ${!isIgnored ? 'checked' : ''} onchange="window.toggleIgnore('${jobId}', ${f.index})" style="cursor:pointer;" />
-          <label for="chk-${f.index}" style="font-family:monospace; font-size:13px; cursor:pointer; color: ${isIgnored ? '#64748b' : '#f8fafc'}; text-decoration: ${isIgnored ? 'line-through' : 'none'}; word-break: break-all;">
+          <label for="chk-${f.index}" style="font-family:monospace; font-size:13px; cursor:pointer; color: ${isIgnored ? 'var(--text-muted)' : 'var(--text-primary)'}; text-decoration: ${isIgnored ? 'line-through' : 'none'}; word-break: break-all;">
             ${escapeHtml(f.name)}
           </label>
         </div>
@@ -376,7 +438,7 @@ function renderPreviewPanel(data, mergeSuggestion) {
       <td class="preview-arrow">→</td>
       <td class="preview-new">
         <div>${escapeHtml(f.new_name)}</div>
-        <div style="font-size: 0.65rem; color: rgba(255,255,255,0.35); margin-top: 4px; font-family: var(--font-mono); word-break: break-all; display: flex; flex-direction: column; gap: 2px;">
+        <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 4px; font-family: var(--font-mono); word-break: break-all; display: flex; flex-direction: column; gap: 2px;">
           <span>📂 转移至: ${f.dest_root ? `[${escapeHtml(f.dest_root)}] ${escapeHtml(f.dest_dir)}/` : escapeHtml(f.new_path)}</span>
           ${f.hardlink_path ? `<span>🔗 硬链至: ${f.hardlink_root ? `[${escapeHtml(f.hardlink_root)}] ${escapeHtml(f.hardlink_dir)}/` : escapeHtml(f.hardlink_path)}</span>` : ''}
         </div>
@@ -394,7 +456,7 @@ function renderPreviewPanel(data, mergeSuggestion) {
         <td class="preview-arrow">→</td>
         <td class="preview-new">
           <div class="preview-preserved-label">原样保留</div>
-          <div style="font-size: 0.65rem; color: rgba(255,255,255,0.25); margin-top: 4px; font-family: var(--font-mono); word-break: break-all;">📂 转移至: ${f.dest_root ? `[${escapeHtml(f.dest_root)}] ${escapeHtml(f.dest_dir)}/` : escapeHtml(f.new_path)}</div>
+          <div style="font-size: 0.65rem; color: var(--text-muted); margin-top: 4px; font-family: var(--font-mono); word-break: break-all;">📂 转移至: ${f.dest_root ? `[${escapeHtml(f.dest_root)}] ${escapeHtml(f.dest_dir)}/` : escapeHtml(f.new_path)}</div>
         </td>
       </tr>
     `).join('')}
@@ -405,6 +467,10 @@ function renderPreviewPanel(data, mergeSuggestion) {
     <div class="preview-header">
       改名预览 — ${data.renamed.length} 个文件将重命名
       ${data.preserved.length > 0 ? `，${data.preserved.length} 个特典文件保留` : ''}
+    </div>
+    <div class="tags-container" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+      <span class="episode-tag">${escapeHtml(data.anime_name)} · 第 ${data.season} 季</span>
+      ${renderTmdbTags(data)}
     </div>
     <table class="preview-table">
       <thead>
@@ -638,7 +704,7 @@ async function renderRules() {
   
   tbody.innerHTML = dirs.map(d => {
     const isAuto = d.mode === 'auto';
-    const configType = d.has_yaml ? '<span class="badge info">triage.yaml</span>' : (d.is_root ? '<span class="badge info">内置规则</span>' : '<span class="badge" style="background:#475569">无配置</span>');
+    const configType = d.has_yaml ? '<span class="badge badge-blue">triage.yaml</span>' : (d.is_root ? '<span class="badge badge-blue">内置规则</span>' : '<span class="badge badge-gray">无配置</span>');
     const modeBadge = isAuto ? '<span class="badge auto">AUTO</span>' : '<span class="badge confirm">CONFIRM</span>';
     
     return `
@@ -655,9 +721,9 @@ async function renderRules() {
         <td>${configType}</td>
         <td>
           <label style="display:inline-flex; align-items:center; cursor:pointer; gap:8px;">
-            <span style="font-size:14px; font-weight:600; color:#cbd5e1;">CONFIRM</span>
+            <span style="font-size:14px; font-weight:600; color:var(--text-primary);">CONFIRM</span>
             <input type="checkbox" style="cursor:pointer; width:18px; height:18px;" ${isAuto ? 'checked' : ''} onchange="window.toggleDirectoryMode('${escapeHtml(d.name)}', this.checked)" />
-            <span style="font-size:14px; font-weight:600; color:#cbd5e1;">AUTO</span>
+            <span style="font-size:14px; font-weight:600; color:var(--text-primary);">AUTO</span>
           </label>
         </td>
       </tr>
@@ -820,7 +886,7 @@ async function saveTmdbKey() {
   try {
     await API.updateSettings({ tmdb_api_key: key });
     status.textContent = '✓ 已保存';
-    status.style.color = 'var(--success, #4caf50)';
+    status.style.color = 'var(--success, #bf3f68)';
     setTimeout(() => { status.textContent = ''; }, 3000);
     showToast('TMDB API key 已保存', 'success');
   } catch (e) {

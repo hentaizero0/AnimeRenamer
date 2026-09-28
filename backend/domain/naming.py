@@ -46,6 +46,8 @@ def compute_target_plan(
     mode: str | None = None,
     link_dir: Path | None = None,
 ) -> TargetPlan:
+    if job.has_mixed_seasons:
+        raise ValueError("mixed seasons require separate batches")
     effective_mode = mode or resolve_mode(job, config)
     effective_link_dir = resolve_link_dir(job, config, effective_mode) if link_dir is None else link_dir
     download_dir = Path(config.download_dir)

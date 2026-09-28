@@ -96,7 +96,9 @@ class SeriesConfig(BaseModel):
     )
     tmdb_name: str = Field(..., description="Canonical TMDB series title")
     tmdb_id: int | None = Field(default=None, ge=1, description="TMDB series ID")
+    backdrop_path: str | None = Field(default=None, description="TMDB series backdrop image path")
     season: int = Field(1, ge=1, description="Target season number")
+    season_title: str | None = Field(default=None, description="TMDB title for the selected season")
     aliases: list[str] = Field(default_factory=list, description="Alternative match strings")
 
     @field_validator("aliases", mode="before")
@@ -169,17 +171,29 @@ class BatchTriageJob(BaseModel):
         return 1
 
     @property
+    def effective_season_title(self) -> str | None:
+        if self.series_config and self.effective_season == self.series_config.season:
+            return self.series_config.season_title
+        return None
+
+    @property
     def confidence(self) -> float:
         confs = [it.parsed.confidence for it in self.items if it.parsed]
         return sum(confs) / len(confs) if confs else 0.0
 
     @property
+    def has_mixed_seasons(self) -> bool:
+        return len({it.parsed.season for it in self.items
+                    if it.is_video and not it.ignored and it.parsed and it.parsed.season is not None}) > 1
+
+    @property
     def has_conflict(self) -> bool:
         from collections import defaultdict
         video_eps = defaultdict(int)
+        mixed = self.has_mixed_seasons
         for it in self.items:
             if it.is_video and it.parsed and it.parsed.episode is not None and not it.ignored:
-                video_eps[it.parsed.episode] += 1
+                video_eps[(it.parsed.season if mixed else None, it.parsed.episode)] += 1
         return any(count >= 2 for count in video_eps.values())
 
 
