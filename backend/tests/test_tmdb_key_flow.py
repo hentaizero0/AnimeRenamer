@@ -11,7 +11,7 @@ test_tmdb_key_flow.py — TMDB API Key 全链路验收测试（plan Part 1 · �
 
 目标后端契约（修复后应满足）
 -----------------------------------------------------------------
-1) get_effective_tmdb_key() -> str：优先 settings.json，其次 env TMDB_API_KEY，
+1) get_effective_tmdb_key() -> str：优先 env TMDB_API_KEY，其次 settings.json，
    否则 ""；"${TMDB_API_KEY}" 占位符与含 '*' 的掩码值一律视为"未配置"。
 2) GET  /api/settings -> {"has_key": bool, "key_hint": "****<last4>" | ""}
    且响应中**不含** "tmdb_api_key" 字段（杜绝回灌）。
