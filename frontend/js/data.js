@@ -50,55 +50,6 @@ const MOCK = {
     },
   ],
 
-  recent: [
-    {
-      id: "act-001",
-      filename: "[SubsPlease] Dungeon Meshi - 23 (1080p).mkv",
-      title: "Delicious in Dungeon S01E23",
-      status: "done",
-      confidence: 0.97,
-      mode: "auto",
-      timestamp: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-    },
-    {
-      id: "act-002",
-      filename: "[Erai-raws] Frieren - 28 [1080p].mkv",
-      title: "Frieren: Beyond Journey's End S01E28",
-      status: "done",
-      confidence: 0.94,
-      mode: "auto",
-      timestamp: new Date(Date.now() - 3.5 * 60 * 60 * 1000).toISOString(),
-    },
-    {
-      id: "act-003",
-      filename: "Oshi no Ko S2E04 [WEBRip].mkv",
-      title: "Oshi no Ko S02E04",
-      status: "done",
-      confidence: 0.91,
-      mode: "confirm",
-      timestamp: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString(),
-    },
-    {
-      id: "act-004",
-      filename: "[DameDesuYo] Re_Zero - 02 (1920x1080).mkv",
-      title: "Re:Zero S03E02",
-      status: "error",
-      confidence: 0.48,
-      mode: "confirm",
-      timestamp: new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString(),
-      error_msg: "Season detection failed — ambiguous release group tag",
-    },
-    {
-      id: "act-005",
-      filename: "[Yameii] Bocchi the Rock! - 13 [English Dub].mkv",
-      title: "Bocchi the Rock! S01E13",
-      status: "done",
-      confidence: 0.93,
-      mode: "auto",
-      timestamp: new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString(),
-    },
-  ],
-
   series: [
     {
       id: "ser-001",

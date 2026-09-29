@@ -5,15 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="description" content="AnimeRenamer v2 — Intelligent anime file renaming dashboard with confidence scoring and queue management." />
   <title>AnimeRenamer v2 — Dashboard</title>
-  <link rel="stylesheet" href="css/style.css?v=20260928-theme7" />
-  <!-- Preconnect for Google Fonts -->
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="css/style.css?v=20260929-themes-fonts3" />
 </head>
 <body>
 
   <!-- ── Sidebar ─────────────────────────────────────────────────────────── -->
-  <aside class="sidebar" role="navigation" aria-label="Main navigation">
+  <aside class="sidebar" id="sidebar" role="navigation" aria-label="Main navigation">
     <div class="sidebar-logo">
       <div class="logo-icon" aria-hidden="true">🎌</div>
       <div class="logo-text">
@@ -57,13 +55,17 @@
       </div>
     </div>
   </aside>
+  <button class="sidebar-backdrop" id="mobile-nav-backdrop" type="button" aria-label="关闭导航菜单" hidden></button>
 
   <!-- ── Main ────────────────────────────────────────────────────────────── -->
   <main class="main" role="main">
 
     <!-- Topbar -->
     <header class="topbar">
-      <h1 class="topbar-title" id="topbar-title">仪表盘</h1>
+      <div class="topbar-heading">
+        <button class="btn btn-ghost btn-icon mobile-nav-toggle" id="btn-mobile-nav" type="button" aria-label="打开导航菜单" aria-controls="sidebar" aria-expanded="false">☰</button>
+        <h1 class="topbar-title" id="topbar-title">仪表盘</h1>
+      </div>
       <div class="topbar-actions">
         <button class="btn btn-ghost btn-icon" id="btn-refresh" title="刷新数据" aria-label="Refresh data">
           ↺
@@ -93,7 +95,7 @@
             <div class="stat-icon" aria-hidden="true">✓</div>
             <div>
               <div class="stat-value" id="stat-processed">—</div>
-              <div class="stat-label">今日已处理</div>
+              <div class="stat-label">历史操作记录</div>
             </div>
           </div>
           <div class="stat-card errors">
@@ -125,14 +127,6 @@
           <div class="empty-state">
             <p style="font-size: 13px; color: var(--text-muted);">暂无开启 AUTO 模式的目录</p>
           </div>
-        </div>
-
-        <!-- Recent activity -->
-        <div class="section-header" style="margin-top:32px;">
-          <h2 class="section-title">最近活动</h2>
-        </div>
-        <div class="activity-list" id="recent-list" role="log" aria-label="Recent activity">
-          <!-- JS renders here -->
         </div>
 
       </section>
@@ -189,7 +183,7 @@
 
         <div class="section-header">
           <h2 class="section-title">番剧库</h2>
-          <span style="font-size:12px;color:var(--text-muted)">已配置 <strong id="series-count" style="color:var(--text-primary)">—</strong> 部</span>
+          <span style="font-size:13px;color:var(--text-muted)">已配置 <strong id="series-count" style="color:var(--text-primary)">—</strong> 部</span>
         </div>
 
         <div class="series-grid" id="series-grid" role="list" aria-label="Configured series">
@@ -200,37 +194,33 @@
 
       <!-- ════════════════ Logs View ════════════════ -->
       <section class="view" id="view-logs" aria-label="Operation logs">
-
-        <div class="section-header">
-          <h2 class="section-title">操作日志</h2>
+        <div class="logs-page-header">
+          <div>
+            <h2 class="section-title">操作日志</h2>
+            <p class="logs-description">查看来源与目标路径、逐文件操作结果和失败原因，可复制后分享排查。</p>
+          </div>
+          <div class="logs-controls">
+            <label class="logs-limit-label" for="logs-limit">显示
+              <select id="logs-limit" aria-label="显示最近多少条日志">
+                <option value="100" selected>最近 100 条</option>
+                <option value="250">最近 250 条</option>
+                <option value="500">最近 500 条</option>
+              </select>
+            </label>
+            <span id="logs-count" class="logs-count" aria-live="polite">读取中…</span>
+            <button id="copy-logs" class="btn btn-secondary btn-sm" type="button">复制日志</button>
+            <button id="clear-logs" class="btn btn-danger btn-sm" type="button">清空日志</button>
+          </div>
         </div>
 
-        <!-- Filter bar -->
         <div class="log-filter-bar" role="group" aria-label="Filter logs by status">
-          <button class="log-filter-btn active" data-filter="all"     id="filter-all">全部</button>
-          <button class="log-filter-btn"        data-filter="done"    id="filter-done">✓ 成功</button>
-          <button class="log-filter-btn"        data-filter="error"   id="filter-error">✕ 错误</button>
-          <button class="log-filter-btn"        data-filter="skipped" id="filter-skipped">⏭ 跳过</button>
-          <button class="log-filter-btn"        data-filter="pending" id="filter-pending">⋯ 待处理</button>
+          <button class="log-filter-btn active" data-filter="all" id="filter-all">全部</button>
+          <button class="log-filter-btn" data-filter="done" id="filter-done">✓ 成功</button>
+          <button class="log-filter-btn" data-filter="error" id="filter-error">✕ 失败</button>
         </div>
 
-        <div class="table-wrap">
-          <table role="table" aria-label="Operation log table">
-            <thead>
-              <tr>
-                <th scope="col">时间</th>
-                <th scope="col">原始文件</th>
-                <th scope="col">重命名为</th>
-                <th scope="col">状态</th>
-                <th scope="col">置信度</th>
-                <th scope="col">模式</th>
-                <th scope="col">备注</th>
-              </tr>
-            </thead>
-            <tbody id="logs-tbody">
-              <tr><td colspan="7" class="empty-table">加载中…</td></tr>
-            </tbody>
-          </table>
+        <div id="logs-list" class="logs-list" role="feed" aria-label="操作日志列表" aria-busy="true">
+          <div class="empty-state"><p>正在加载日志…</p></div>
         </div>
 
       </section>
@@ -240,24 +230,58 @@
           <h2 class="section-title">⚙️ 设置</h2>
         </div>
 
-        <div class="card">
+        <div class="settings-card theme-settings-card">
+          <div class="card-body">
+            <h3>界面主题</h3>
+            <p class="settings-description">选择一套配色与视觉风格；更改会立即生效，并保存在当前浏览器。</p>
+            <fieldset class="theme-options" aria-label="选择界面主题">
+              <label class="theme-option">
+                <input type="radio" name="appearance-theme" value="bili" checked>
+                <span class="theme-swatch theme-swatch-bili" aria-hidden="true"></span>
+                <span class="theme-option-copy"><strong>B站海盐粉</strong><small>默认风格 · 海盐蓝与粉色</small></span>
+              </label>
+              <label class="theme-option">
+                <input type="radio" name="appearance-theme" value="terminal">
+                <span class="theme-swatch theme-swatch-terminal" aria-hidden="true"></span>
+                <span class="theme-option-copy"><strong>深夜数据台</strong><small>炭黑底色与琥珀终端字形</small></span>
+              </label>
+              <label class="theme-option">
+                <input type="radio" name="appearance-theme" value="swiss">
+                <span class="theme-swatch theme-swatch-swiss" aria-hidden="true"></span>
+                <span class="theme-option-copy"><strong>瑞士路标</strong><small>纸白留白与朱红信号色</small></span>
+              </label>
+              <label class="theme-option">
+                <input type="radio" name="appearance-theme" value="midcentury">
+                <span class="theme-swatch theme-swatch-midcentury" aria-hidden="true"></span>
+                <span class="theme-option-copy"><strong>复古唱片</strong><small>奶油纸色与复古衬线标题</small></span>
+              </label>
+              <label class="theme-option">
+                <input type="radio" name="appearance-theme" value="y2k">
+                <span class="theme-swatch theme-swatch-y2k" aria-hidden="true"></span>
+                <span class="theme-option-copy"><strong>千禧冰蓝</strong><small>冰蓝玻璃感与洋红渐变</small></span>
+              </label>
+            </fieldset>
+          </div>
+        </div>
+
+        <div class="card settings-card">
           <div class="card-body">
             <h3 style="margin-top:0">TMDB API 密钥</h3>
-            <p style="color:var(--text-muted);font-size:12px">用于查询番剧信息。从 <a href="https://www.themoviedb.org/settings/api" target="_blank">TMDB</a> 获取。</p>
+            <p style="color:var(--text-muted)">用于查询番剧信息。从 <a href="https://www.themoviedb.org/settings/api" target="_blank">TMDB</a> 获取。</p>
 
             <div style="display:flex;gap:10px;margin-top:15px">
-              <input type="password" id="settings-tmdb-key" placeholder="粘贴你的 TMDB API key" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:4px;font-family:monospace;font-size:12px">
-              <button onclick="saveTmdbKey()" style="padding:8px 16px;background:var(--accent);color:white;border:none;border-radius:4px;cursor:pointer">保存</button>
+              <input class="form-input mono" type="password" id="settings-tmdb-key" placeholder="粘贴你的 TMDB API key" style="flex:1">
+              <button class="btn btn-accent" onclick="saveTmdbKey()">保存</button>
             </div>
 
-            <div id="settings-status" style="margin-top:10px;font-size:12px;color:var(--text-muted)"></div>
+            <div id="settings-status" style="margin-top:10px;color:var(--text-muted)"></div>
           </div>
         </div>
 
         <div class="card" style="margin-top:16px;">
           <div class="card-body">
             <h3 style="margin-top:0">预留路径配置</h3>
-            <p style="color:var(--text-muted);font-size:12px">ponytail: 先占位，不接后端保存，等后续目录策略和媒体库逻辑一起做。</p>
+            <p style="color:var(--text-muted)">ponytail: 先占位，不接后端保存，等后续目录策略和媒体库逻辑一起做。</p>
 
             <div class="form-group">
               <label class="form-label" for="settings-storage-collect-dir">冷盘收藏目录</label>
@@ -292,8 +316,8 @@
             <a href="https://www.themoviedb.org" target="_blank" rel="noopener noreferrer" aria-label="The Movie Database (TMDB)">
               <img src="assets/tmdb-logo.svg" alt="The Movie Database (TMDB)" style="display:block;width:100px;height:auto;margin:12px 0">
             </a>
-            <p style="color:var(--text-muted);font-size:12px;margin:0">本产品使用 TMDB API，但不由 TMDB 背书或认证。</p>
-            <p style="color:var(--text-muted);font-size:12px;margin:4px 0 0">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
+            <p style="color:var(--text-muted);font-size:13px;margin:0">本产品使用 TMDB API，但不由 TMDB 背书或认证。</p>
+            <p style="color:var(--text-muted);font-size:13px;margin:4px 0 0">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
           </div>
         </div>
       </section>
@@ -377,7 +401,7 @@
   <!-- ── Scripts ─────────────────────────────────────────────────────────── -->
   <script src="js/data.js"></script>
   <script src="js/api.js"></script>
-  <script src="js/app.js?v=20260928-5"></script>
+  <script src="js/app.js?v=20260928-themes3"></script>
 
 </body>
 </html>

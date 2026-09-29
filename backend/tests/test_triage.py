@@ -122,6 +122,32 @@ class TestExecuteTriageJob:
         
         link_file = airing_dir / "Frieren" / "Season 01" / "Frieren S01E01.mkv"
         assert link_file.exists()
+        rename_log = next(op for op in res.file_operations if op.operation == "rename")
+        hardlink_log = next(op for op in res.file_operations if op.operation == "hardlink")
+        assert (rename_log.source_path, rename_log.dest_path, rename_log.status) == (
+            str(video_src), str(dest_file), "success"
+        )
+        assert (hardlink_log.source_path, hardlink_log.dest_path, hardlink_log.status) == (
+            str(dest_file), str(link_file), "success"
+        )
+
+    @pytest.mark.asyncio
+    async def test_confirm_dry_run_keeps_source_directory(self, setup_dirs):
+        download_dir, storage_dir, _, config = setup_dirs
+        video_rel = "Frieren/Frieren - 01.mkv"
+        video_src = download_dir / video_rel
+        video_src.parent.mkdir(parents=True, exist_ok=True)
+        video_src.write_text("video")
+        parsed = ParsedAnime(raw_filename="Frieren - 01.mkv", detected_title="Frieren", season=1, episode=1, extension="mkv")
+        item = FileTriageItem(relative_path=video_rel, parsed=parsed, is_video=True)
+        job = BatchTriageJob(id="job_dry_run", source_dir="Frieren", items=[item])
+
+        result = await execute_triage_job(job, config, dry_run=True)
+
+        assert result.success is True
+        assert video_src.exists()
+        assert not (storage_dir / "Frieren" / "Season 01" / "Frieren S01E01.mkv").exists()
+        assert all(operation.status == "planned" for operation in result.file_operations)
 
     @pytest.mark.asyncio
     async def test_execute_triage_with_subtitles(self, setup_dirs):

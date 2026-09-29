@@ -1,7 +1,9 @@
 import pytest
 from fastapi.testclient import TestClient
+import backend.main as main
+from backend.adapters.state_store import load_history
 from backend.main import app, queue, history
-from backend.models import BatchTriageJob, FileTriageItem, ParsedAnime, TriageStatus, TriageResult, SeriesConfig
+from backend.models import BatchTriageJob, FileTriageItem, ParsedAnime, TriageFileOperation, TriageStatus, TriageResult, SeriesConfig
 
 @pytest.fixture
 def client():
@@ -138,7 +140,16 @@ def test_patch_job_not_found(client):
     assert response.status_code == 404
 
 def test_get_recent_history(client):
-    res = TriageResult(success=True, source_path="/src/Frieren", dest_path="/dst/Frieren")
+    operation = TriageFileOperation(
+        source_path="/src/Frieren/01.mkv",
+        dest_path="/dst/Frieren/Season 01/Frieren S01E01.mkv",
+    )
+    res = TriageResult(
+        success=True,
+        source_path="/src/Frieren",
+        dest_path="/dst/Frieren",
+        file_operations=[operation],
+    )
     history.append({
         "job_id": "job_hist",
         "result": res,
@@ -150,6 +161,50 @@ def test_get_recent_history(client):
     assert len(data) == 1
     assert data[0]["id"] == "job_hist"
     assert data[0]["title"] == "Frieren"
+    assert data[0]["source_path"] == "/src/Frieren"
+    assert data[0]["dest_path"] == "/dst/Frieren"
+    assert data[0]["file_operations"][0]["dest_path"] == operation.dest_path
+
+
+def test_get_logs_defaults_to_100_and_caps_at_500(client):
+    for index in range(519, -1, -1):
+        history.append({
+            "job_id": f"job-{index}",
+            "result": TriageResult(success=True, source_path=f"/src/{index}", dest_path=f"/dst/{index}"),
+            "title": "Show",
+            "timestamp": f"2026-01-01T00:{index % 60:02d}:00+00:00",
+        })
+
+    default_response = client.get("/api/logs")
+    max_response = client.get("/api/logs?limit=500")
+    too_many_response = client.get("/api/logs?limit=501")
+
+    assert default_response.status_code == 200
+    assert len(default_response.json()) == 100
+    assert default_response.json()[0]["id"] == "job-519"
+    assert default_response.json()[-1]["id"] == "job-420"
+    assert len(max_response.json()) == 500
+    assert max_response.json()[0]["id"] == "job-519"
+    assert max_response.json()[-1]["id"] == "job-20"
+    assert too_many_response.status_code == 422
+
+def test_clear_logs_persists_empty_history_and_preserves_pending_queue(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "STATE_FILE", tmp_path / "state.json")
+    history.extend([
+        {"job_id": "done", "result": TriageResult(success=True, source_path="/src", dest_path="/dst"), "title": "Done"},
+        {"job_id": "failed", "result": TriageResult(success=False, source_path="/src", error_msg="failed"), "title": "Failed"},
+    ])
+    queue["pending"] = BatchTriageJob(id="pending", source_dir="/src", status=TriageStatus.pending)
+
+    response = client.delete("/api/logs")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "cleared", "count": 2}
+    assert history == []
+    assert list(queue) == ["pending"]
+    assert load_history(main.STATE_FILE) == []
+    assert client.get("/api/stats").json()["errors"] == 0
+    assert client.get("/api/stats").json()["processed_today"] == 0
 
 def test_series_crud_endpoints(client):
     # Test Get Series

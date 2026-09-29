@@ -4,7 +4,29 @@
 let currentView = 'dashboard';
 let pendingItems = [];
 let logFilter = 'all';
+let logLimit = 100;
+let visibleLogs = [];
 let editModal = null;
+const THEME_STORAGE_KEY = 'anime-renamer-theme';
+const THEME_IDS = ['bili', 'terminal', 'swiss', 'midcentury', 'y2k'];
+
+function setTheme(themeId, persist = true) {
+  const theme = THEME_IDS.includes(themeId) ? themeId : 'bili';
+  document.documentElement.dataset.theme = theme;
+  document.querySelectorAll('input[name="appearance-theme"]').forEach(input => {
+    input.checked = input.value === theme;
+  });
+  if (persist) {
+    try { localStorage.setItem(THEME_STORAGE_KEY, theme); } catch (_) { /* Storage can be disabled by the browser. */ }
+  }
+  return theme;
+}
+
+function restoreTheme() {
+  let stored = 'bili';
+  try { stored = localStorage.getItem(THEME_STORAGE_KEY) || stored; } catch (_) { /* Use the default when Storage is unavailable. */ }
+  return setTheme(stored, false);
+}
 
 // ── Helpers// ───────────────────────────────────────────────────────────────────
 
@@ -49,6 +71,26 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function normalizeAnimeGroupTitle(title) {
+  return String(title || '').normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+function groupPendingItems(items) {
+  const groups = new Map();
+  for (const item of items) {
+    const rawTitle = String(item.detected_title || item.original_parsed_title || '未识别标题').trim().replace(/\s+/g, ' ');
+    const normalizedTitle = normalizeAnimeGroupTitle(rawTitle);
+    const tmdbId = Number(item.tmdb_id);
+    // ponytail: without TMDB IDs this only groups case/punctuation variants; cross-language aliases need metadata.
+    const key = Number.isSafeInteger(tmdbId) && tmdbId > 0
+      ? `tmdb:${tmdbId}`
+      : `title:${normalizedTitle}`;
+    if (!groups.has(key)) groups.set(key, { title: rawTitle, items: [] });
+    groups.get(key).items.push(item);
+  }
+  return [...groups.values()];
 }
 
 function tmdbBackdropUrl(path) {
@@ -104,6 +146,18 @@ function navigate(view) {
   renderView(view);
 }
 
+function setMobileNavOpen(open) {
+  const sidebar = document.getElementById('sidebar');
+  const toggle = document.getElementById('btn-mobile-nav');
+  const backdrop = document.getElementById('mobile-nav-backdrop');
+  const isMobile = window.matchMedia('(max-width: 700px)').matches;
+  sidebar.classList.toggle('open', isMobile && open);
+  sidebar.inert = isMobile && !open;
+  backdrop.hidden = !isMobile || !open;
+  toggle.setAttribute('aria-expanded', String(isMobile && open));
+  toggle.setAttribute('aria-label', open ? '关闭导航菜单' : '打开导航菜单');
+}
+
 // ── Main render dispatcher ─────────────────────────────────────────────────────
 async function renderView(view) {
   if (view === 'dashboard') await renderDashboard();
@@ -116,10 +170,9 @@ async function renderView(view) {
 
 // ── Dashboard view ────────────────────────────────────────────────────────────
 async function renderDashboard() {
-  const [stats, pending, recent, dirs, autoDirs] = await Promise.all([
+  const [stats, pending, dirs, autoDirs] = await Promise.all([
     API.getStats(),
     API.getPending(),
-    API.getRecent(),
     API.getDirectories(),
     API.getAutoSubscriptions()
   ]);
@@ -136,6 +189,9 @@ async function renderDashboard() {
 
   // Pending confirm queue
   const pendingEl = document.getElementById('pending-cards');
+  const expandedStackIds = new Set(
+    [...pendingEl.querySelectorAll('.anime-stack.expanded')].map(stack => stack.dataset.stackId)
+  );
   if (pendingConfirm.length === 0) {
     pendingEl.innerHTML = `
       <div class="empty-state">
@@ -143,16 +199,11 @@ async function renderDashboard() {
         <p>暂无需要手动确认的队列</p>
       </div>`;
   } else {
-    const groups = new Map();
-    pendingConfirm.forEach(item => {
-      const title = String(item.detected_title || item.original_parsed_title || '未识别标题').trim().replace(/\s+/g, ' ');
-      if (!groups.has(title)) groups.set(title, []);
-      groups.get(title).push(item);
-    });
-    pendingEl.innerHTML = [...groups].map(([title, items]) => items.length === 1
+    const groups = groupPendingItems(pendingConfirm);
+    pendingEl.innerHTML = groups.map(({ title, items }) => items.length === 1
       ? renderPendingCard(items[0])
       : `
-        <div class="anime-stack" data-count="${items.length}" role="group" aria-label="${escapeHtml(title)}，${items.length} 张待处理卡片">
+        <div class="anime-stack" data-stack-id="${escapeHtml(items[0].id)}" data-count="${items.length}" role="group" aria-label="${escapeHtml(title)}，${items.length} 张待处理卡片">
           <span class="anime-stack-layer anime-stack-layer-back" aria-hidden="true"></span>
           ${items.length > 2 ? '<span class="anime-stack-layer anime-stack-layer-front" aria-hidden="true"></span>' : ''}
           <div class="anime-stack-cards">
@@ -165,6 +216,9 @@ async function renderDashboard() {
     `).join('');
     attachCardListeners(pendingEl);
   }
+  pendingEl.querySelectorAll('.anime-stack').forEach(stack => {
+    if (expandedStackIds.has(stack.dataset.stackId)) toggleAnimeStack(stack);
+  });
 
   // Auto subscriptions
   const autoEl = document.getElementById('auto-list');
@@ -185,24 +239,6 @@ async function renderDashboard() {
     `).join('');
   }
 
-  // Recent activity
-  const recentEl = document.getElementById('recent-list');
-  recentEl.innerHTML = recent.map(item => `
-    <div class="activity-row" data-id="${item.id}">
-      <div class="activity-status">${statusBadge(item.status)}</div>
-      <div class="activity-info">
-        <span class="activity-filename mono">${escapeHtml(item.filename)}</span>
-        <span class="activity-arrow">→</span>
-        <span class="activity-title">${escapeHtml(item.title)}</span>
-        ${item.error_msg ? `<span class="activity-error">${escapeHtml(item.error_msg)}</span>` : ''}
-      </div>
-      <div class="activity-meta">
-        ${modeBadge(item.mode)}
-        <span class="confidence-mini" style="color:${confidenceColor(item.confidence)}">${Math.round(item.confidence * 100)}%</span>
-        <span class="activity-time">${timeAgo(item.timestamp)}</span>
-      </div>
-    </div>
-  `).join('');
 }
 
 function renderPendingCard(item, stackCount = 1) {
@@ -243,14 +279,14 @@ function renderPendingCard(item, stackCount = 1) {
         <span class="episode-tag">第 ${item.season} 季</span>
         <span class="episode-tag">共 ${item.video_count} 集</span>
         ${renderTmdbTags(item)}
-        ${item.has_subs ? '<span class="episode-tag" style="background:#fff4df;color:#8a5700;border-color:#f4dfb5;">外挂字幕</span>' : ''}
+        ${item.has_subs ? '<span class="episode-tag" style="background:var(--warning-soft);color:var(--warning-text);border-color:var(--warning-border);">外挂字幕</span>' : ''}
       </div>
       
       ${activeConflicts.length > 0
-        ? `<div class="merge-hint" style="background:#fff0ef;border-color:#f2d0cd;color:#ad3939;">
+        ? `<div class="merge-hint" style="background:var(--error-soft);border-color:var(--error-border);color:var(--error-text);">
              <span class="merge-icon">⚠️</span>
              <span>发现冲突多版本: 第 ${activeConflicts.join(', ')} 集</span>
-             <button class="btn btn-ghost" style="padding:2px 8px;font-size:12px;margin-left:auto;color:#ad3939;border:1px solid #f2d0cd;" onclick="event.stopPropagation(); window.openConflictModal('${item.id}')">解决冲突</button>
+             <button class="btn btn-ghost" style="padding:2px 8px;font-size:12px;margin-left:auto;color:var(--error-text);border:1px solid var(--error-border);" onclick="event.stopPropagation(); window.openConflictModal('${item.id}')">解决冲突</button>
            </div>`
         : ''
       }
@@ -656,39 +692,153 @@ async function renderSeries() {
 }
 
 // ── Logs view// ─────────────────────────────────────────────────────────────────
+function formatLogTimestamp(timestamp) {
+  if (!timestamp || timestamp === 'Just now') return '时间未记录';
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) return '时间未记录';
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  });
+}
+
+function lowConfidenceLabel(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const score = Number(value);
+  return Number.isFinite(score) && score < 0.8 ? `置信度 ${Math.round(score * 100)}%` : '';
+}
+
+function formatLogsForClipboard(logs) {
+  return logs.map(log => {
+    const status = log.status === 'done' ? '成功' : log.status === 'error' ? '失败' : log.status;
+    const mode = log.mode === 'auto' ? '自动' : '手动';
+    const confidence = lowConfidenceLabel(log.confidence);
+    const lines = [
+      `[${formatLogTimestamp(log.timestamp)}] ${status} · ${log.title || '未命名任务'}`,
+      [`任务 ID：${log.id || '未记录'}`, `模式：${mode}`, confidence].filter(Boolean).join(' · '),
+      `来源目录：${log.source_path || log.original_filename || '未记录'}`,
+      `目标目录：${log.dest_path || log.renamed_to || '未记录'}`,
+    ];
+    const operations = Array.isArray(log.file_operations) ? log.file_operations : [];
+    if (operations.length) {
+      for (const operation of operations) {
+        const kind = operation.operation === 'hardlink' ? '硬链接' : '重命名/移动';
+        const state = { success: '完成', failed: '失败', rolled_back: '已回滚', rollback_attempted: '已尝试回滚', planned: '计划' }[operation.status] || operation.status;
+        lines.push(`  ${kind}（${state}）：${operation.source_path} → ${operation.dest_path}`);
+        if (operation.error_msg) lines.push(`    错误：${operation.error_msg}`);
+      }
+    } else {
+      lines.push('单文件明细：旧记录未保存');
+    }
+    if (log.hardlink_path) lines.push(`硬链接目录：${log.hardlink_path}`);
+    if (log.error_msg) lines.push(`错误：${log.error_msg}`);
+    return lines.join('\n');
+  }).join('\n\n');
+}
+
+function renderLogEntry(log) {
+  const isSuccess = log.status === 'done';
+  const operations = Array.isArray(log.file_operations) ? log.file_operations : [];
+  const sourcePath = log.source_path || log.original_filename || '来源路径未记录';
+  const destPath = log.dest_path || log.renamed_to || '目标路径未记录';
+  const confidence = lowConfidenceLabel(log.confidence);
+  const modeLabel = log.mode === 'auto' ? '自动' : '手动确认';
+  const destinationLabel = log.mode === 'auto' ? '改名后所在目录' : '归档目录';
+  const operationsHtml = operations.length ? `
+    <details class="log-file-details">
+      <summary>逐项路径明细（${operations.length} 项）</summary>
+      <div class="log-file-list">
+        ${operations.map(operation => {
+          const kind = operation.operation === 'hardlink' ? '硬链接' : '重命名 / 移动';
+          const state = { success: '完成', failed: '失败', rolled_back: '已回滚', rollback_attempted: '已尝试回滚', planned: '计划' }[operation.status] || operation.status;
+          return `<div class="log-file-operation">
+            <div class="log-file-operation-meta">${escapeHtml(kind)} · ${escapeHtml(state)}</div>
+            <div class="log-file-route">
+              <code>${escapeHtml(operation.source_path)}</code><span aria-hidden="true">→</span><code>${escapeHtml(operation.dest_path)}</code>
+            </div>
+            ${operation.error_msg ? `<div class="log-file-error">${escapeHtml(operation.error_msg)}</div>` : ''}
+          </div>`;
+        }).join('')}
+      </div>
+    </details>` : '<p class="log-legacy-note">旧记录只保存了目录路径，没有单文件明细。</p>';
+
+  return `<article class="log-entry ${isSuccess ? 'log-entry-success' : 'log-entry-error'}">
+    <div class="log-entry-header">
+      <span class="log-status ${isSuccess ? 'log-status-success' : 'log-status-error'}">${isSuccess ? '✓ 成功' : '✕ 失败'}</span>
+      <time class="log-time" datetime="${escapeHtml(log.timestamp || '')}">${escapeHtml(formatLogTimestamp(log.timestamp))}</time>
+      <span class="log-mode">${modeLabel}</span>
+      ${confidence ? `<span class="log-confidence">${confidence}</span>` : ''}
+      <span class="log-job-id">ID ${escapeHtml(log.id || '未记录')}</span>
+    </div>
+    <h3 class="log-title">${escapeHtml(log.title || '未命名任务')}</h3>
+    <div class="log-route">
+      <div class="log-path-group"><span>改名前目录</span><code class="log-path" title="${escapeHtml(sourcePath)}">${escapeHtml(sourcePath)}</code></div>
+      <span class="log-route-arrow" aria-hidden="true">→</span>
+      <div class="log-path-group"><span>${destinationLabel}</span><code class="log-path" title="${escapeHtml(destPath)}">${escapeHtml(destPath)}</code></div>
+    </div>
+    ${log.mode === 'auto' && sourcePath === destPath ? '<p class="log-route-note">文件在原目录内改名；展开下方明细查看文件名变化。</p>' : ''}
+    ${log.hardlink_path ? `<div class="log-hardlink-path"><span>硬链接目录</span><code class="log-path">${escapeHtml(log.hardlink_path)}</code></div>` : ''}
+    ${log.error_msg ? `<div class="log-error-message"><strong>错误原因</strong><span>${escapeHtml(log.error_msg)}</span></div>` : ''}
+    ${operationsHtml}
+  </article>`;
+}
+
+async function copyVisibleLogs() {
+  if (!visibleLogs.length) {
+    showToast('当前没有可复制的日志', 'warning');
+    return;
+  }
+  const text = formatLogsForClipboard(visibleLogs);
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('Clipboard API unavailable');
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    const copied = typeof document.execCommand === 'function' && document.execCommand('copy');
+    textarea.remove();
+    if (!copied) {
+      showToast('复制失败，请检查浏览器剪贴板权限', 'error');
+      return;
+    }
+  }
+  showToast(`已复制 ${visibleLogs.length} 条日志`, 'success');
+}
+
+async function clearLogs() {
+  if (!window.confirm('清空全部操作日志？首页的历史操作数和错误数也会清零。此操作不可撤销。')) return;
+  const result = await API.clearLogs();
+  if (!result || result.status !== 'cleared') {
+    showToast('清理日志失败，请稍后重试', 'error');
+    return;
+  }
+  await renderLogs();
+  const stats = await API.getStats();
+  document.getElementById('stat-processed').textContent = stats.processed_today;
+  document.getElementById('stat-errors').textContent = stats.errors;
+  showToast(`已清理 ${result.count} 条日志`, 'success');
+}
+
 async function renderLogs() {
-  const logs = await API.getLogs(logFilter === 'all' ? null : logFilter);
+  const list = document.getElementById('logs-list');
+  list.setAttribute('aria-busy', 'true');
+  const logs = await API.getLogs(logFilter === 'all' ? null : logFilter, logLimit);
+  visibleLogs = logs;
 
   // Update filter tabs
   document.querySelectorAll('.log-filter-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.filter === logFilter);
   });
 
-  const filtered = logFilter === 'all' ? logs : logs.filter(l => l.status === logFilter);
-  const tbody = document.getElementById('logs-tbody');
-  tbody.innerHTML = filtered.map(l => `
-    <tr class="log-row log-row-${l.status}">
-      <td class="log-time">${timeAgo(l.timestamp)}</td>
-      <td class="log-original mono">${escapeHtml(l.original_filename)}</td>
-      <td class="log-renamed">
-        ${l.renamed_to
-          ? `<code class="mono renamed-name">${escapeHtml(l.renamed_to)}</code>
-             ${l.hardlink_path ? `<div style="font-size: 0.7em; color: var(--text-muted); margin-top: 4px; font-family: var(--font-mono);">🔗 ${escapeHtml(l.hardlink_path)}</div>` : ''}`
-          : `<span class="no-rename">—</span>`}
-      </td>
-      <td>${statusBadge(l.status)}</td>
-      <td>
-        <div class="conf-cell">
-          <span style="color:${confidenceColor(l.confidence)}">${Math.round(l.confidence * 100)}%</span>
-          <div class="conf-bar-mini-track">
-            <div class="conf-bar-mini-fill" style="width:${Math.round(l.confidence*100)}%;background:${confidenceColor(l.confidence)}"></div>
-          </div>
-        </div>
-      </td>
-      <td>${modeBadge(l.mode)}</td>
-      <td class="log-note">${l.error_msg ? `<span class="error-note">${escapeHtml(l.error_msg)}</span>` : ''}</td>
-    </tr>
-  `).join('') || `<tr><td colspan="7" class="empty-table">没有匹配的日志记录</td></tr>`;
+  document.getElementById('logs-count').textContent = `显示最近 ${logs.length} 条（最多 500 条）`;
+  document.getElementById('copy-logs').disabled = logs.length === 0;
+  list.innerHTML = logs.map(renderLogEntry).join('')
+    || '<div class="empty-state"><p>没有匹配的操作日志</p></div>';
+  list.setAttribute('aria-busy', 'false');
 }
 
 
@@ -798,11 +948,24 @@ async function updateApiStatus() {
 
 // ── Init// ───────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
+  restoreTheme();
+  document.querySelectorAll('input[name="appearance-theme"]').forEach(input => {
+    input.addEventListener('change', event => {
+      if (event.currentTarget.checked) setTheme(event.currentTarget.value);
+    });
+  });
+
   // Nav — click + keyboard
+  const mobileNavToggle = document.getElementById('btn-mobile-nav');
+  const sidebar = document.getElementById('sidebar');
+  setMobileNavOpen(false);
+  mobileNavToggle.addEventListener('click', () => setMobileNavOpen(!sidebar.classList.contains('open')));
+  document.getElementById('mobile-nav-backdrop').addEventListener('click', () => setMobileNavOpen(false));
+  window.matchMedia('(max-width: 700px)').addEventListener('change', () => setMobileNavOpen(false));
   document.querySelectorAll('.nav-item').forEach(el => {
-    el.addEventListener('click', () => navigate(el.dataset.view));
+    el.addEventListener('click', () => { navigate(el.dataset.view); setMobileNavOpen(false); });
     el.addEventListener('keydown', e => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(el.dataset.view); }
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(el.dataset.view); setMobileNavOpen(false); }
     });
   });
 
@@ -814,12 +977,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Log filter buttons
   document.querySelectorAll('.log-filter-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.log-filter-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
       logFilter = btn.dataset.filter;
       renderLogs();
     });
   });
+  document.getElementById('logs-limit').addEventListener('change', event => {
+    const limit = Number(event.target.value);
+    logLimit = [100, 250, 500].includes(limit) ? limit : 100;
+    renderLogs();
+  });
+  document.getElementById('copy-logs').addEventListener('click', copyVisibleLogs);
+  document.getElementById('clear-logs').addEventListener('click', clearLogs);
 
   // Modal
   document.getElementById('modal-overlay').addEventListener('click', (e) => {
@@ -838,7 +1006,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('modal-close').addEventListener('click', closeEditModal);
   document.getElementById('modal-cancel').addEventListener('click', closeEditModal);
   document.getElementById('modal-save').addEventListener('click', submitEdit);
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeEditModal(); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { closeEditModal(); setMobileNavOpen(false); }
+  });
 
   // Refresh button
   document.getElementById('btn-refresh').addEventListener('click', async () => {
@@ -886,12 +1056,12 @@ async function saveTmdbKey() {
   try {
     await API.updateSettings({ tmdb_api_key: key });
     status.textContent = '✓ 已保存';
-    status.style.color = 'var(--success, #bf3f68)';
+    status.style.color = 'var(--success)';
     setTimeout(() => { status.textContent = ''; }, 3000);
     showToast('TMDB API key 已保存', 'success');
   } catch (e) {
     status.textContent = '✗ 保存失败';
-    status.style.color = 'var(--error, #f44336)';
+    status.style.color = 'var(--error)';
     showToast('保存失败: ' + e.message, 'error');
   }
 }

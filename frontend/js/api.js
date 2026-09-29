@@ -49,6 +49,19 @@ async function _post(path, body) {
   }
 }
 
+async function _delete(path) {
+  const online = await _checkOnline();
+  if (!online) return null;
+  try {
+    const r = await fetch(`${API_BASE}${path}`, { method: 'DELETE', signal: AbortSignal.timeout(5000) });
+    if (!r.ok) return null;
+    return r.json();
+  } catch {
+    _apiOnline = false;
+    return null;
+  }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 const API = {
@@ -58,18 +71,26 @@ const API = {
   async getPending() {
     return (await _get('/pending')) ?? MOCK.pending;
   },
-  async getRecent() {
-    return (await _get('/recent')) ?? MOCK.recent;
-  },
   async getIgnored() {
     return (await _get('/ignored')) ?? [];
   },
   async getSeries() {
     return (await _get('/series')) ?? MOCK.series;
   },
-  async getLogs(status = null) {
-    const qs = status ? `?status=${status}` : '';
-    return (await _get(`/logs${qs}`)) ?? MOCK.logs;
+  async getLogs(status = null, limit = 100) {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (status) params.set('status', status);
+    const logs = await _get(`/logs?${params}`);
+    return logs ?? MOCK.logs.filter(l => !status || l.status === status).slice(0, limit);
+  },
+  async clearLogs() {
+    if (await _checkOnline()) return await _delete('/logs');
+    const count = MOCK.logs.length;
+    MOCK.logs.length = 0;
+    MOCK.stats.processed_today = 0;
+    MOCK.stats.errors = 0;
+    if ('today' in MOCK.stats) MOCK.stats.today = 0;
+    return { status: 'cleared', count };
   },
   async confirmItem(id, payload = {}) {
     const res = await _post(`/pending/${id}/confirm`, payload);

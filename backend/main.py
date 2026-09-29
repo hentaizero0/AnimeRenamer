@@ -5,7 +5,7 @@ from typing import Any
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import json
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Body
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -423,19 +423,24 @@ async def patch_job(job_id: str, updates: dict[str, Any]) -> BatchTriageJob:
 @app.get("/api/recent")
 async def get_history() -> list[dict[str, Any]]:
     res = []
-    # Reverse history to show newest first
-    for entry in reversed(history):
+    for entry in history:
         r = coerce_triage_result(entry.get("result"))
         if r is None:
             continue
+        source_path = Path(r.source_path) if r.source_path else None
+        if source_path and not source_path.is_absolute():
+            source_path = Path(config.download_dir) / source_path
         res.append({
-            "id": entry["job_id"],
+            "id": entry.get("job_id", ""),
             "status": "done" if r.success else "error",
             "filename": Path(r.source_path).name if r.source_path else "Unknown",
             "title": entry.get("title", Path(r.dest_path).stem if r.dest_path else "Unknown"),
             "original_filename": Path(r.source_path).name if r.source_path else "Unknown",
             "renamed_to": Path(r.dest_path).name if r.dest_path else None,
+            "source_path": str(source_path) if source_path else None,
+            "dest_path": r.dest_path,
             "hardlink_path": str(r.hardlink_path) if r.hardlink_path else None,
+            "file_operations": [op.model_dump() for op in r.file_operations],
             "error_msg": r.error_msg,
             "mode": entry.get("mode", "auto"),
             "confidence": entry.get("confidence", 1.0),
@@ -444,11 +449,21 @@ async def get_history() -> list[dict[str, Any]]:
     return res
 
 @app.get("/api/logs")
-async def get_logs(status: str | None = None) -> list[dict[str, Any]]:
+async def get_logs(
+    status: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> list[dict[str, Any]]:
     logs = await get_history()
     if status:
         logs = [l for l in logs if l["status"] == status]
-    return logs
+    return logs[:limit]
+
+@app.delete("/api/logs")
+async def clear_logs() -> dict[str, Any]:
+    count = len(history)
+    history.clear()
+    _save_state()
+    return {"status": "cleared", "count": count}
 
 @app.post("/api/scan")
 async def trigger_scan() -> dict[str, str]:

@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime
 
 from backend.models import BatchTriageJob, FileTriageItem, ParsedAnime, TriageResult, TriageStatus
 from backend.services.queue_service import QueueService
@@ -21,6 +22,18 @@ def test_append_history_keeps_result():
     service.append_history("a", TriageResult(success=True, source_path="/src"), "Show")
     assert service.history[0]["job_id"] == "a"
     assert service.history[0]["result"].success is True
+    assert datetime.fromisoformat(service.history[0]["timestamp"]).tzinfo is not None
+
+
+def test_append_history_keeps_newest_500():
+    service = QueueService()
+    result = TriageResult(success=True, source_path="/src")
+    for index in range(510):
+        service.append_history(str(index), result, "Show")
+
+    assert len(service.history) == 500
+    assert service.history[0]["job_id"] == "509"
+    assert service.history[-1]["job_id"] == "10"
 
 
 def test_prune_missing_jobs(tmp_path):

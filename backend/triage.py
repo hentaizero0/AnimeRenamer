@@ -6,7 +6,7 @@ import logging
 from backend.adapters.fs import create_hardlink, rename_and_move, rollback_moves
 from backend.domain.mode import resolve_link_dir, resolve_mode
 from backend.domain.naming import build_video_stems_by_episode, compute_target_plan
-from backend.models import BatchTriageJob, TriageResult, TriageStatus
+from backend.models import BatchTriageJob, TriageFileOperation, TriageResult, TriageStatus
 from backend.config import AppConfig
 
 logger = logging.getLogger(__name__)
@@ -34,6 +34,7 @@ def _execute_triage_job_sync(
     overall_success = True
     error_msg = None
     executed_moves: list[tuple[Path, Path]] = []
+    file_operations: list[TriageFileOperation] = []
     video_stems_by_ep = build_video_stems_by_episode(job, download_dir)
 
     for it in job.items:
@@ -46,12 +47,23 @@ def _execute_triage_job_sync(
             continue
         if plan.target_file != source_file:
             res = rename_and_move(source_file, plan.target_file, dry_run)
+            file_operations.append(TriageFileOperation(
+                source_path=str(source_file),
+                dest_path=str(plan.target_file),
+                operation="rename",
+                status="planned" if dry_run and res.success else "success" if res.success else "failed",
+                error_msg=res.error_msg,
+            ))
             if res.success and not dry_run:
                 executed_moves.append((source_file, plan.target_file))
             if not res.success:
                 overall_success = False
                 error_msg = res.error_msg
                 rollback_moves(executed_moves)
+                rolled_back = {(str(src), str(dst)) for src, dst in executed_moves}
+                for operation in file_operations:
+                    if (operation.source_path, operation.dest_path) in rolled_back:
+                        operation.status = "rollback_attempted"
                 break
 
         if plan.link_target:
@@ -59,6 +71,13 @@ def _execute_triage_job_sync(
                 plan.link_target.unlink()
             link_source = plan.target_file if plan.target_file.exists() or dry_run else source_file
             link_res = create_hardlink(link_source, plan.link_target, dry_run)
+            file_operations.append(TriageFileOperation(
+                source_path=str(link_source),
+                dest_path=str(plan.link_target),
+                operation="hardlink",
+                status="planned" if dry_run and link_res.success else "success" if link_res.success else "failed",
+                error_msg=link_res.error_msg,
+            ))
             if not link_res.success:
                 overall_success = False
                 error_msg = f"Hardlink failed: {link_res.error_msg}"
@@ -77,17 +96,29 @@ def _execute_triage_job_sync(
                     
                     season_str = f"{season:02d}"
                     target_file = storage_dir / anime_name / f"Season {season_str}" / rel_to_anime
-                    rename_and_move(child, target_file, dry_run)
+                    move_result = rename_and_move(child, target_file, dry_run)
+                    file_operations.append(TriageFileOperation(
+                        source_path=str(child),
+                        dest_path=str(target_file),
+                        operation="rename",
+                        status="planned" if dry_run and move_result.success else "success" if move_result.success else "failed",
+                        error_msg=move_result.error_msg,
+                    ))
+                    if not move_result.success:
+                        overall_success = False
+                        error_msg = move_result.error_msg
             
-            try:
-                shutil.rmtree(source_dir_path)
-            except Exception:
-                logger.debug("Failed to remove source dir %s", source_dir_path, exc_info=True)
+            if overall_success and not dry_run:
+                try:
+                    shutil.rmtree(source_dir_path)
+                except Exception:
+                    logger.debug("Failed to remove source dir %s", source_dir_path, exc_info=True)
 
     return TriageResult(
         success=overall_success, 
         source_path=job.source_dir, 
         dest_path=str(download_dir / job.source_dir) if mode == "auto" else str(storage_dir / anime_name),
         hardlink_path=str(link_dir / anime_name) if link_dir else None,
-        error_msg=error_msg
+        error_msg=error_msg,
+        file_operations=file_operations,
     )

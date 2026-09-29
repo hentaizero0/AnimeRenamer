@@ -202,6 +202,14 @@ class BatchTriageJob(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class TriageFileOperation(BaseModel):
+    source_path: str
+    dest_path: str
+    operation: str = "rename"
+    status: str = "success"
+    error_msg: str | None = None
+
+
 class TriageResult(BaseModel):
     """
     Final outcome after a triage/rename operation has been executed.
@@ -225,5 +233,7 @@ class TriageResult(BaseModel):
         default_factory=dict,
         description="Data required to roll back this operation",
     )
+
+    file_operations: list[TriageFileOperation] = Field(default_factory=list)
 
     model_config = {"frozen": True}

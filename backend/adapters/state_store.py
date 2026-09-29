@@ -44,7 +44,7 @@ def load_history(state_file: Path) -> list[dict[str, Any]]:
 
 def save_history(state_file: Path, history: list[dict[str, Any]]) -> None:
     payload = {
-        "history": [_serialize_history_entry(entry) for entry in history[-100:]],
+        "history": [_serialize_history_entry(entry) for entry in history[:500]],
         "timestamp": str(datetime.now(timezone.utc).isoformat()),
     }
     state_file.write_text(json.dumps(payload, default=str, indent=2))

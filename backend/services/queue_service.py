@@ -1,6 +1,7 @@
 """Queue and history state holder."""
 
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any
 
 from backend.models import BatchTriageJob, TriageResult, TriageStatus
@@ -33,7 +34,7 @@ class QueueService:
         title: str,
         mode: str = "auto",
         confidence: float = 1.0,
-        timestamp: str = "Just now",
+        timestamp: str | None = None,
     ) -> None:
         self.history.insert(0, {
             "job_id": job_id,
@@ -41,8 +42,9 @@ class QueueService:
             "title": title,
             "mode": mode,
             "confidence": confidence,
-            "timestamp": timestamp,
+            "timestamp": timestamp or datetime.now(timezone.utc).isoformat(timespec="seconds"),
         })
+        del self.history[500:]
 
     def prune_missing_jobs(self, download_dir: Path) -> None:
         stale = [
