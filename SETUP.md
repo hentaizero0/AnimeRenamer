@@ -4,17 +4,20 @@
 
 ---
 
-## 你的环境概况（已从 unriad.output 提取）
+## 当前部署概况（按 2026-06-23 容器检查结果）
 
-| 项目 | 路径 |
+| 项目 | 当前值 |
 |---|---|
-| 下载目录 | `/mnt/user/hentaidisk/Downloads` |
-| 动漫存储目录 | `/mnt/user/hentaidisk/video/anime` |
-| Jellyfin 追番目录 | `/mnt/user/hentaidisk/video/link/Bangumi` |
-| Jellyfin TV收藏目录 | `/mnt/user/hentaidisk/video/link/anime/动漫` |
-| Jellyfin 电影目录 | `/mnt/user/hentaidisk/video/link/anime/动画电影` |
+| 项目目录 | `/mnt/user/hentaidisk/AnimeRenamer` |
+| 媒体根目录（容器内 `/vault`） | `/mnt/user/hentaidisk/media_vault` |
+| 下载目录 | `/mnt/user/hentaidisk/media_vault/Downloads` |
+| 动漫存储目录 | `/mnt/user/hentaidisk/media_vault/video/anime` |
+| Jellyfin 追番目录 | `/mnt/user/hentaidisk/media_vault/video/link/Bangumi` |
+| Jellyfin TV 收藏目录 | `/mnt/user/hentaidisk/media_vault/video/link/anime/动漫` |
 | PUID | `99` (nobody) |
 | PGID | `100` (users) |
+
+当前 `series_config.yaml` 的 `series` 为空，下载目录是整个 `Downloads`，不是仅 `Downloads/Bangumi`。
 
 ---
 
@@ -120,14 +123,14 @@ settings:
   confidence_threshold: 0.85
   default_mode: confirm
   # 下载监控目录（建议只监控 Bangumi 子目录，过滤非动画文件）
-  download_dir: "/mnt/user/hentaidisk/Downloads/Bangumi"
-  storage_dir: "/mnt/user/hentaidisk/video/anime"
+  download_dir: "/vault/Downloads/Bangumi"
+  storage_dir: "/vault/video/anime"
   # 新番追番目录（当季、每周更新）
-  jellyfin_airing_dir: "/mnt/user/hentaidisk/video/link/Bangumi"
+  jellyfin_airing_dir: "/vault/video/link/Bangumi"
   # 补番收藏目录（TV动画）
-  jellyfin_collect_dir: "/mnt/user/hentaidisk/video/link/anime/动漫"
+  jellyfin_collect_dir: "/vault/video/link/anime/动漫"
   # 电影（目前需手动，待后续实现电影支持）
-  # jellyfin_movie_dir: "/mnt/user/hentaidisk/video/link/anime/动画电影"
+  # jellyfin_movie_dir: "/vault/video/link/anime/动画电影"
 
 series:
   # ===== 当季追番（auto模式，全自动）=====
@@ -200,56 +203,34 @@ series:
 
 ---
 
-### A2. `docker-compose.yml` 完整版
+### A2. `docker-compose.yml`
 
-直接覆盖 `docker-compose.yml`：
-
-```yaml
-version: "3.8"
-services:
-  anime-triage:
-    build: .
-    container_name: anime-triage
-    ports:
-      - "8765:8765"
-    environment:
-      - PUID=99
-      - PGID=100
-      - TMDB_API_KEY=${TMDB_API_KEY}
-    volumes:
-      # 只挂载 Bangumi 子目录，过滤非动画内容
-      - /mnt/user/hentaidisk/Downloads/Bangumi:/downloads
-      # 动漫存储目录（整理后的最终位置）
-      - /mnt/user/hentaidisk/video/anime:/anime
-      # Jellyfin 追番目录（当季新番 hardlink）
-      - /mnt/user/hentaidisk/video/link/Bangumi:/jellyfin/airing
-      # Jellyfin 收藏目录（补番 hardlink）
-      - /mnt/user/hentaidisk/video/link/anime/动漫:/jellyfin/anime
-      # 配置和日志（项目目录）
-      - ./config:/app/config
-      - ./logs:/app/logs
-    restart: unless-stopped
-```
+使用仓库自带的 `docker-compose.yml`，不要用旧版的分目录挂载示例覆盖它。首次安装时由安装脚本准备配置；更新现有容器时保留当前 `.env`、`config/series_config.yaml` 和 `state.json`，不要重跑安装脚本。
 
 ---
 
-### A3. 在 Unraid 上部署
+### A3. 打包并更新现有 Unraid 部署
+
+开发机在项目目录执行：
 
 ```bash
-# 1. 把项目放到 appdata
-cd /mnt/user/appdata/
-git clone <你的仓库地址> anime-triage
-cd anime-triage
-
-# 2. 配置已经预填好了，直接构建
-docker-compose up -d --build
-
-# 3. 查看日志
-docker-compose logs -f anime-triage
-
-# 4. 访问 WebUI
-# http://你的NAS-IP:8765
+./scripts/package_for_unraid.sh
 ```
+
+每次都会覆盖生成 `dist/anime-triage-unraid.tgz` 和 `dist/deploy_unraid.sh`，不带时间戳，也不生成备份。
+把这两个文件复制到 Unraid 的项目目录 `/mnt/user/hentaidisk/AnimeRenamer/`。例如：
+
+```bash
+scp dist/anime-triage-unraid.tgz dist/deploy_unraid.sh root@UNRAID_HOST:/mnt/user/hentaidisk/AnimeRenamer/
+```
+
+然后在 Unraid Terminal 执行这一条部署命令：
+
+```bash
+cd /mnt/user/hentaidisk/AnimeRenamer && bash ./deploy_unraid.sh ./anime-triage-unraid.tgz
+```
+
+脚本会将包内 `anime_triage/` 的内容解到现有项目目录，并运行 `docker compose up -d --build`。压缩包不包含 `.env`、`config/series_config.yaml`、`state.json`、日志和 `user-config`，覆盖源码时会保留 Unraid 上现有设置及历史数据。它只用于更新已有部署，不会创建或备份项目目录。
 
 ---
 

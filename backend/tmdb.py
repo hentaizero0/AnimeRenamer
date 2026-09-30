@@ -4,6 +4,8 @@ import re
 import httpx
 from rapidfuzz import fuzz
 
+_OVA_MARKER = re.compile(r"(?<![A-Za-z0-9])OVA(?![A-Za-z0-9])", re.IGNORECASE)
+
 @dataclass
 class TmdbMatch:
     tmdb_id: int
@@ -140,6 +142,12 @@ class TmdbClient:
                         final_name = details["name"]
                 if details_resp_en.status_code == 200:
                     details_en = details_resp_en.json()
+
+                query_has_ova = bool(_OVA_MARKER.search(title))
+                candidate_has_ova = any(
+                    _OVA_MARKER.search(name or "")
+                    for name in (search_matched_name, original_name, details.get("name", ""))
+                )
                     
                 season_count = details.get("number_of_seasons", 1)
                 
@@ -156,13 +164,7 @@ class TmdbClient:
                     if alt_sim > best_alt_sim:
                         best_alt_sim = alt_sim
                         
-                # If we get a very high match on an alternative title (like Romaji), boost it significantly!
-                if best_alt_sim > 0.85:
-                    best_alt_sim = 0.95
-                    
-                base_conf = max(sim1, sim2, localized_sim, best_alt_sim) * 0.7
-                if base_conf > 0.6:  # Uncap it a bit if it was a strong alias match
-                    base_conf = max(base_conf, best_alt_sim)
+                base_conf = max(sim1, sim2, localized_sim, best_alt_sim)
                 
                 # Check if the title matches a specific season name better
                 matched_season = None
@@ -200,8 +202,7 @@ class TmdbClient:
                         matched_season = s_num
                         
                 if best_season_sim > best_alt_sim:
-                    best_alt_sim = best_season_sim
-                    base_conf = max(base_conf, best_alt_sim)
+                    base_conf = max(base_conf, best_season_sim)
 
                 boost = 0.0
                 if item.get("origin_country") and "JP" in item.get("origin_country"):
@@ -209,7 +210,11 @@ class TmdbClient:
                 if 16 in item.get("genre_ids", []):
                     boost += 0.1
                     
-                conf = min(1.0, base_conf + boost)
+                # Add country/genre evidence without flattening distinct title matches at 1.0.
+                conf = base_conf + (1.0 - base_conf) * boost
+                if candidate_has_ova != query_has_ova:
+                    # Keep implicit OVA candidates below tmdb_async_resolve's acceptance threshold.
+                    conf = min(conf, 0.59)
                 
                 results.append(TmdbMatch(
                     tmdb_id=tmdb_id,

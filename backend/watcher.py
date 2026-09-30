@@ -53,13 +53,22 @@ async def tmdb_async_resolve(job_id: str, search_title: str, dir_name: str, conf
         
     logger.info("[TMDB] Resolving %s with title='%s', dir='%s'", job_id, search_title, dir_name)
     client = TmdbClient(api_key)
+    parsed_season = next(
+        (it.parsed.season for it in queued_job.items
+         if it.is_video and not it.ignored and it.parsed and it.parsed.season is not None),
+        None,
+    )
     
     # Try searching by parsed title first
     results = await client.search_anime(search_title)
+    if parsed_season is not None:
+        results.sort(key=lambda match: match.matched_season == parsed_season, reverse=True)
     
     # If no good results OR we missed a season match, fallback to directory name (which is often cleaner/localized)
     if dir_name and dir_name != ".":
-        needs_fallback = not results or results[0].confidence <= 0.6 or results[0].matched_season is None
+        needs_fallback = not results or results[0].confidence <= 0.6 or results[0].matched_season is None or (
+            parsed_season is not None and results[0].matched_season != parsed_season
+        )
         if needs_fallback:
             import re
             # ponytail: mixed letter/digit suffixes after a season look like release tags;
@@ -69,9 +78,19 @@ async def tmdb_async_resolve(job_id: str, search_title: str, dir_name: str, conf
             
             fallback_results = await client.search_anime(clean_dir)
             if fallback_results:
-                # Use fallback if it's generally better, or if it provides a season match that we lacked
-                if fallback_results[0].confidence > (results[0].confidence if results else 0) or \
-                   (fallback_results[0].matched_season is not None and (not results or results[0].matched_season is None)):
+                if parsed_season is not None:
+                    fallback_results.sort(key=lambda match: match.matched_season == parsed_season, reverse=True)
+                current_season_matches = bool(
+                    results and parsed_season is not None and results[0].matched_season == parsed_season
+                )
+                fallback_season_matches = (
+                    fallback_results[0].matched_season == parsed_season
+                    if parsed_season is not None
+                    else fallback_results[0].matched_season is not None
+                )
+                if fallback_results[0].confidence > (results[0].confidence if results else 0) or (
+                    fallback_season_matches and not current_season_matches
+                ):
                     results = fallback_results
                     search_title = f"{search_title} (fallback: {clean_dir})"
             
@@ -86,11 +105,6 @@ async def tmdb_async_resolve(job_id: str, search_title: str, dir_name: str, conf
     if best_match.confidence > 0.6:
         job = queue_state.get(job_id)
         if job is queued_job and job.series_config is None:
-            parsed_season = next(
-                (it.parsed.season for it in job.items
-                 if it.is_video and not it.ignored and it.parsed and it.parsed.season is not None),
-                None,
-            )
             season_conflict = parsed_season is not None and best_match.matched_season is not None and parsed_season != best_match.matched_season
             selected_season = parsed_season or best_match.matched_season or 1
             # Create a virtual SeriesConfig for it
@@ -324,6 +338,8 @@ class DownloadDirHandler(FileSystemEventHandler):
         self.queue_service = queue_service or default_queue_service
         self.key_resolver = key_resolver
         self.persist_state = persist_state
+        self.auto_jobs_in_progress: set[str] = set()
+        self.auto_output_paths: dict[Path, float | None] = {}
 
     def process_dir_event(self, dir_path: Path, strict: bool = False):
         download_dir = Path(self.config.download_dir)
@@ -338,6 +354,13 @@ class DownloadDirHandler(FileSystemEventHandler):
         try:
             rel_dir = str(anime_dir.relative_to(download_dir))
         except ValueError:
+            return
+
+        existing_job = self.queue_service.find_active_by_source_dir(rel_dir)
+        if existing_job and (
+            existing_job.status == TriageStatus.confirmed
+            or existing_job.id in self.auto_jobs_in_progress
+        ):
             return
             
         job = process_directory(anime_dir, self.config, self.series_db, strict=strict, default_mode=default_mode)
@@ -367,6 +390,12 @@ class DownloadDirHandler(FileSystemEventHandler):
         mode = resolve_mode(job, self.config)
             
         if mode == "auto" and job.status == TriageStatus.pending:
+            if job.id in self.auto_jobs_in_progress:
+                return
+            self.auto_jobs_in_progress.add(job.id)
+            # confirmed doubles as the in-progress state so other handlers/scans
+            # cannot enqueue the same directory while AUTO is running.
+            job.status = TriageStatus.confirmed
             self.loop.create_task(self._tmdb_then_auto(job))
         elif (not job.series_config and job.effective_title) or (
             job.series_config and job.series_config.tmdb_id and not job.series_config.backdrop_path
@@ -378,34 +407,74 @@ class DownloadDirHandler(FileSystemEventHandler):
                 logger.warning("Failed to dispatch TMDB task: %s", e)
 
     async def _tmdb_then_auto(self, job):
-        if not job.series_config and job.effective_title:
-            dir_name = Path(job.source_dir).name
-            await tmdb_async_resolve(job.id, job.effective_title, dir_name, self.config, self.queue_service, self.key_resolver, self.series_db)
-        elif job.series_config and job.series_config.tmdb_id and not job.series_config.backdrop_path:
-            dir_name = Path(job.source_dir).name
-            self.loop.create_task(tmdb_async_resolve(job.id, job.effective_title, dir_name, self.config, self.queue_service, self.key_resolver, self.series_db))
+        expected_outputs: set[Path] = set()
+        try:
+            if not job.series_config and job.effective_title:
+                dir_name = Path(job.source_dir).name
+                await tmdb_async_resolve(job.id, job.effective_title, dir_name, self.config, self.queue_service, self.key_resolver, self.series_db)
+            elif job.series_config and job.series_config.tmdb_id and not job.series_config.backdrop_path:
+                dir_name = Path(job.source_dir).name
+                self.loop.create_task(tmdb_async_resolve(job.id, job.effective_title, dir_name, self.config, self.queue_service, self.key_resolver, self.series_db))
 
-        current_job = self.queue_service.get(job.id) or job
-        if current_job.status != TriageStatus.pending or resolve_mode(current_job, self.config) != "auto":
-            return
-        from backend.triage import execute_triage_job
+            current_job = self.queue_service.get(job.id) or job
+            if current_job.status not in (TriageStatus.pending, TriageStatus.confirmed):
+                return
+            if resolve_mode(current_job, self.config) != "auto":
+                current_job.status = TriageStatus.pending
+                return
 
-        res = await execute_triage_job(current_job, self.config)
+            from backend.domain.naming import build_video_stems_by_episode, compute_target_plan
+            from backend.triage import execute_triage_job
 
-        self.queue_service.append_history(
-            current_job.id,
-            res,
-            current_job.effective_title,
-            mode=resolve_mode(current_job, self.config),
-            confidence=current_job.confidence,
-        )
-        if res.success:
-            current_job.status = TriageStatus.done
-        else:
-            current_job.status = TriageStatus.error
-            current_job.error_message = res.error_msg
-        if self.persist_state:
-            self.persist_state()
+            download_dir = Path(self.config.download_dir)
+            video_stems = build_video_stems_by_episode(current_job, download_dir)
+            for item in current_job.items:
+                if item.ignored:
+                    continue
+                plan = compute_target_plan(current_job, item, self.config, video_stems, mode="auto")
+                if plan.target_file != plan.source_file:
+                    expected_outputs.add(plan.target_file.resolve())
+            self._mark_auto_outputs(expected_outputs)
+
+            res = await execute_triage_job(current_job, self.config)
+
+            self.queue_service.append_history(
+                current_job.id,
+                res,
+                current_job.effective_title,
+                mode=resolve_mode(current_job, self.config),
+                confidence=current_job.confidence,
+            )
+            if res.success:
+                current_job.status = TriageStatus.done
+            else:
+                current_job.status = TriageStatus.error
+                current_job.error_message = res.error_msg
+            if self.persist_state:
+                self.persist_state()
+        except Exception:
+            current_job = self.queue_service.get(job.id)
+            if current_job and current_job.status == TriageStatus.confirmed:
+                current_job.status = TriageStatus.pending
+            logger.exception("AUTO triage failed for %s", job.source_dir)
+        finally:
+            self._finish_auto_outputs(expected_outputs)
+            self.auto_jobs_in_progress.discard(job.id)
+
+    def _mark_auto_outputs(self, paths: set[Path]) -> None:
+        now = time.monotonic()
+        self.auto_output_paths = {
+            path: expiry for path, expiry in self.auto_output_paths.items()
+            if expiry is None or expiry > now
+        }
+        self.auto_output_paths.update({path: None for path in paths})
+
+    def _finish_auto_outputs(self, paths: set[Path]) -> None:
+        # ponytail: 5s covers delayed watchdog delivery; use event IDs if the watcher exposes them.
+        expiry = time.monotonic() + 5
+        for path in paths:
+            if path in self.auto_output_paths and self.auto_output_paths[path] is None:
+                self.auto_output_paths[path] = expiry
 
     def on_created(self, event):
         if not event.is_directory:
@@ -413,6 +482,11 @@ class DownloadDirHandler(FileSystemEventHandler):
             
     def on_moved(self, event):
         if not event.is_directory:
+            dest_path = Path(event.dest_path).resolve()
+            if dest_path in self.auto_output_paths:
+                expiry = self.auto_output_paths.pop(dest_path)
+                if expiry is None or expiry >= time.monotonic():
+                    return
             self.loop.call_soon_threadsafe(self.process_dir_event, Path(event.dest_path).parent)
 
 def start_watcher(loop: asyncio.AbstractEventLoop, queue_service: QueueService | None = None, key_resolver=None, persist_state=None):

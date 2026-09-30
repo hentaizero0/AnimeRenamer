@@ -82,7 +82,7 @@ _JUNK_TAGS: list[re.Pattern[str]] = [p for p in [
     # Hash/CRC tags — [A1B2C3D4]
     re.compile(r"\[[0-9A-Fa-f]{6,8}\]"),
     # Bare parenthetical junk: (v2), (BD), (END), (FINAL)
-    re.compile(r"\((?:v\d+|BD|END|FINAL|OVA|ONA|SP)\)", re.IGNORECASE),
+    re.compile(r"\((?:v\d+|BD|END|FINAL|ONA|SP)\)", re.IGNORECASE),
     # Standalone brackets with only spaces inside
     re.compile(r"\[\s*\]|\(\s*\)"),
 ]]

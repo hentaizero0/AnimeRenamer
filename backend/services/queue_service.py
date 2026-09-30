@@ -23,7 +23,11 @@ class QueueService:
 
     def find_active_by_source_dir(self, source_dir: str) -> BatchTriageJob | None:
         for job in self.queue.values():
-            if job.source_dir == source_dir and job.status in (TriageStatus.pending, TriageStatus.ignored):
+            if job.source_dir == source_dir and job.status in (
+                TriageStatus.pending,
+                TriageStatus.confirmed,
+                TriageStatus.ignored,
+            ):
                 return job
         return None
 

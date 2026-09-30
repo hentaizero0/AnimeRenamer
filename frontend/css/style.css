@@ -631,53 +631,8 @@ body.loaded { opacity: 1; }
   gap: 20px;
 }
 
-.anime-stack {
-  position: relative;
-  min-width: 0;
-  isolation: isolate;
-}
-
-.anime-stack-layer {
-  position: absolute;
-  background: var(--bg-card);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-stack);
-  pointer-events: none;
-  transition: transform 0.3s ease, opacity 0.2s ease;
-}
-
-.anime-stack-layer-back { inset: 2px 1px 0; transform: rotate(3deg); }
-.anime-stack-layer-front { inset: 5px 4px 0; transform: rotate(-2.5deg); }
-.anime-stack-cards { position: relative; z-index: 1; display: grid; min-width: 0; margin: 0 10px 12px; transition: margin 0.32s ease; }
-.anime-stack-primary { min-width: 0; }
-
-.anime-stack-extras {
-  display: grid;
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transform: translateY(-10px);
-  transition: grid-template-rows 0.32s ease, opacity 0.22s ease, transform 0.32s ease;
-}
-
-.anime-stack-extra-grid {
-  min-height: 0;
-  overflow: hidden;
-  display: grid;
-  gap: 16px;
-  padding-top: 0;
-  transition: padding-top 0.32s ease;
-}
-
-.anime-stack.expanded .anime-stack-extras {
-  grid-template-rows: 1fr;
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.anime-stack.expanded .anime-stack-cards { margin: 0; }
-.anime-stack.expanded .anime-stack-extra-grid { padding-top: 16px; }
-.anime-stack.expanded .anime-stack-layer { opacity: 0; transform: translateY(0) rotate(0); }
+.anime-stack.expanded { grid-column: 1; }
+.anime-stack-child[hidden] { display: none; }
 
 .anime-stack-toggle {
   position: relative;

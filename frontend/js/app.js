@@ -116,6 +116,76 @@ function renderTmdbTags(item) {
   `;
 }
 
+function renderEpisodeTags(item) {
+  const episodes = [...new Set((item.episode_set || []).map(Number).filter(Number.isSafeInteger))].sort((a, b) => a - b);
+  if (!episodes.length) return `<span class="episode-tag">共 ${item.video_count} 集</span>`;
+
+  const ranges = [];
+  for (const episode of episodes) {
+    const last = ranges[ranges.length - 1];
+    if (last && episode === last.end + 1) last.end = episode;
+    else ranges.push({ start: episode, end: episode });
+  }
+  return ranges.map(({ start, end }) => `
+    <span class="episode-tag">【${padNum(start)}${end === start ? '' : `-${padNum(end)}`}】</span>
+    <span class="episode-tag">【共 ${end - start + 1} 集】</span>
+  `).join('');
+}
+
+function commonDirectoryPath(paths) {
+  if (!paths.length) return '';
+  const normalized = paths.map(path => String(path || '').replace(/\\/g, '/'));
+  const absolute = normalized[0].startsWith('/');
+  const segments = normalized.map(path => path.split('/').filter(Boolean));
+  let common = segments[0];
+  for (const pathSegments of segments.slice(1)) {
+    let length = 0;
+    while (length < common.length && common[length] === pathSegments[length]) length++;
+    common = common.slice(0, length);
+  }
+  return `${absolute ? '/' : ''}${common.join('/')}` || (absolute ? '/' : '');
+}
+
+function renderSeriesStack(title, items) {
+  const representative = items[0];
+  const seasons = new Map();
+  for (const item of items) {
+    const season = Number(item.season) || 1;
+    if (!seasons.has(season)) seasons.set(season, { episodes: new Set(), fallbackCount: 0 });
+    const summary = seasons.get(season);
+    for (const episode of item.episode_set || []) summary.episodes.add(Number(episode));
+    if (!item.episode_set?.length) summary.fallbackCount += Number(item.video_count) || 0;
+  }
+  const seasonTags = seasons.size > 1
+    ? [...seasons].sort(([a], [b]) => a - b).map(([season, summary]) => {
+      const count = summary.episodes.size + summary.fallbackCount;
+      return `<span class="episode-tag">第 ${season} 季，共 ${count} 集</span>`;
+    }).join('')
+    : items.map(item => `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;"><span class="episode-tag">第 ${item.season} 季</span>${renderEpisodeTags(item)}</div>`).join('');
+  const hasConflicts = items.some(item => Object.values(item.duplicates || {}).some(files => files.filter(file => !file.ignored).length >= 2));
+  const seriesPath = commonDirectoryPath(items.map(item => item.target_path)).replace(/[\\/]Season\s+\d+$/i, '');
+  const backdropUrl = tmdbBackdropUrl(representative.backdrop_path);
+
+  const parentId = escapeHtml(representative.id);
+  return `
+    <div class="pending-card anime-stack series-parent${backdropUrl ? ' has-backdrop' : ''}" data-stack-id="${parentId}" data-count="${items.length}" role="group" aria-label="${escapeHtml(title)}，${items.length} 张待处理卡片" onclick="handleCardClick(event, '${parentId}')">
+      ${backdropUrl ? `<img class="card-backdrop" src="${escapeHtml(backdropUrl)}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : ''}
+      <div class="card-header">
+        <button class="btn btn-ghost btn-sm anime-stack-toggle" type="button" aria-expanded="false" onclick="event.stopPropagation(); toggleAnimeStack(this.closest('.anime-stack'))">展开 ${items.length} 张卡片</button>
+      </div>
+      <div class="card-detected"><span class="detected-title">${escapeHtml(title)}</span></div>
+      <div class="tags-container series-season-tags" style="display:flex;flex-direction:column;align-items:flex-start;gap:8px;margin-bottom:12px;">
+        ${seasonTags}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">${renderTmdbTags({ ...representative, season_title: null })}</div>
+      </div>
+      ${hasConflicts ? '<div class="merge-hint" style="background:var(--error-soft);border-color:var(--error-border);color:var(--error-text);">请展开卡片并先解决多版本冲突</div>' : ''}
+      <div class="card-target"><span class="label">目标路径</span><code class="mono target-path">${escapeHtml(seriesPath)}</code></div>
+      <div class="card-actions">
+        <button class="btn btn-success btn-confirm-all" data-ids="${escapeHtml(items.map(item => item.id).join(','))}" ${hasConflicts ? 'disabled title="请先解决季度卡片中的冲突"' : ''}>✓ 全部确认</button>
+      </div>
+    </div>${items.map(item => renderPendingCard(item, parentId)).join('')}`;
+}
+
 // ── Toast notifications ───────────────────────────────────────────────────────
 function showToast(message, type = 'info') {
   const container = document.getElementById('toast-container');
@@ -202,22 +272,11 @@ async function renderDashboard() {
     const groups = groupPendingItems(pendingConfirm);
     pendingEl.innerHTML = groups.map(({ title, items }) => items.length === 1
       ? renderPendingCard(items[0])
-      : `
-        <div class="anime-stack" data-stack-id="${escapeHtml(items[0].id)}" data-count="${items.length}" role="group" aria-label="${escapeHtml(title)}，${items.length} 张待处理卡片">
-          <span class="anime-stack-layer anime-stack-layer-back" aria-hidden="true"></span>
-          ${items.length > 2 ? '<span class="anime-stack-layer anime-stack-layer-front" aria-hidden="true"></span>' : ''}
-          <div class="anime-stack-cards">
-            <div class="anime-stack-primary">${renderPendingCard(items[0], items.length)}</div>
-            <div class="anime-stack-extras" aria-hidden="true" inert>
-              <div class="anime-stack-extra-grid">${items.slice(1).map(item => renderPendingCard(item)).join('')}</div>
-            </div>
-          </div>
-        </div>
-    `).join('');
+      : renderSeriesStack(title, items)).join('');
     attachCardListeners(pendingEl);
   }
   pendingEl.querySelectorAll('.anime-stack').forEach(stack => {
-    if (expandedStackIds.has(stack.dataset.stackId)) toggleAnimeStack(stack);
+    if (expandedStackIds.has(stack.dataset.stackId)) toggleAnimeStack(stack, false);
   });
 
   // Auto subscriptions
@@ -241,7 +300,7 @@ async function renderDashboard() {
 
 }
 
-function renderPendingCard(item, stackCount = 1) {
+function renderPendingCard(item, stackParentId = null) {
   const pct = Math.round(item.confidence * 100);
   const color = confidenceColor(item.confidence);
   const clsLabel = confidenceLabel(item.confidence);
@@ -251,11 +310,10 @@ function renderPendingCard(item, stackCount = 1) {
     return activeFiles.length >= 2;
   }) : [];
   return `
-    <div class="pending-card${backdropUrl ? ' has-backdrop' : ''}" data-id="${item.id}" onclick="handleCardClick(event, '${item.id}')">
+    <div class="pending-card${backdropUrl ? ' has-backdrop' : ''}${stackParentId ? ' anime-stack-child' : ''}" data-id="${item.id}"${stackParentId ? ` data-stack-parent="${stackParentId}" hidden inert aria-hidden="true"` : ''} onclick="handleCardClick(event, '${item.id}')">
       ${backdropUrl ? `<img class="card-backdrop" src="${escapeHtml(backdropUrl)}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : ''}
       <div class="card-header">
         <span class="card-size">${escapeHtml(item.source_size)}</span>
-        ${stackCount > 1 ? `<button class="btn btn-ghost btn-sm anime-stack-toggle" type="button" aria-expanded="false" onclick="event.stopPropagation(); toggleAnimeStack(this.closest('.anime-stack'))">展开 ${stackCount} 张</button>` : ''}
       </div>
 
       <div class="card-original">
@@ -277,7 +335,7 @@ function renderPendingCard(item, stackCount = 1) {
       
       <div class="tags-container" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
         <span class="episode-tag">第 ${item.season} 季</span>
-        <span class="episode-tag">共 ${item.video_count} 集</span>
+        ${renderEpisodeTags(item)}
         ${renderTmdbTags(item)}
         ${item.has_subs ? '<span class="episode-tag" style="background:var(--warning-soft);color:var(--warning-text);border-color:var(--warning-border);">外挂字幕</span>' : ''}
       </div>
@@ -335,15 +393,44 @@ function renderPendingCard(item, stackCount = 1) {
     </div>`;
 }
 
-function toggleAnimeStack(stack) {
+function toggleAnimeStack(stack, animate = true) {
   if (!stack) return;
+  const grid = stack.parentElement;
+  const cards = [...grid.children].filter(card => card.classList.contains('pending-card') && !card.hidden);
+  const before = new Map(cards.map(card => [card, card.getBoundingClientRect()]));
   const expanded = stack.classList.toggle('expanded');
   const toggle = stack.querySelector('.anime-stack-toggle');
-  const extras = stack.querySelector('.anime-stack-extras');
-  toggle.setAttribute('aria-expanded', String(expanded));
-  toggle.textContent = expanded ? '收起卡片' : `展开 ${stack.dataset.count} 张`;
-  extras.inert = !expanded;
-  extras.setAttribute('aria-hidden', String(!expanded));
+  const children = [...grid.querySelectorAll('.anime-stack-child')]
+    .filter(card => card.dataset.stackParent === stack.dataset.stackId);
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', String(expanded));
+    toggle.textContent = expanded ? '收起卡片' : `展开 ${stack.dataset.count} 张卡片`;
+  }
+  children.forEach(card => {
+    card.hidden = !expanded;
+    card.inert = !expanded;
+    card.setAttribute('aria-hidden', String(!expanded));
+  });
+
+  if (animate && stack.animate && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const options = { duration: 320, easing: 'cubic-bezier(.22,.61,.36,1)' };
+    cards.forEach(card => {
+      if (card.hidden) return;
+      const from = before.get(card);
+      const to = card.getBoundingClientRect();
+      if (from.left === to.left && from.top === to.top) return;
+      card.animate([
+        { transform: `translate(${from.left - to.left}px, ${from.top - to.top}px)`, transformOrigin: 'top left' },
+        { transform: getComputedStyle(card).transform, transformOrigin: 'top left' },
+      ], options);
+    });
+    if (expanded) children.forEach(card => {
+      card.animate([
+        { opacity: 0, transform: 'translateY(8px)' },
+        { opacity: 1, transform: getComputedStyle(card).transform },
+      ], options);
+    });
+  }
 }
 
 function handleCardClick(event, jobId) {
@@ -357,6 +444,10 @@ function handleCardClick(event, jobId) {
   }
 
   const stack = event.currentTarget.closest('.anime-stack');
+  if (stack && event.currentTarget.classList.contains('series-parent')) {
+    toggleAnimeStack(stack);
+    return;
+  }
   if (stack && !stack.classList.contains('expanded')) {
     toggleAnimeStack(stack);
     return;
@@ -528,12 +619,23 @@ function attachCardListeners(container) {
   container.querySelectorAll('.btn-confirm').forEach(btn => {
     btn.addEventListener('click', () => handleConfirm(btn.dataset.id));
   });
+  container.querySelectorAll('.btn-confirm-all').forEach(btn => {
+    btn.addEventListener('click', () => handleConfirmAll(btn.dataset.ids.split(','), btn));
+  });
   container.querySelectorAll('.btn-edit').forEach(btn => {
     btn.addEventListener('click', () => handleEdit(btn.dataset.id));
   });
   container.querySelectorAll('.btn-skip').forEach(btn => {
     btn.addEventListener('click', () => handleSkip(btn.dataset.id));
   });
+}
+
+async function handleConfirmAll(ids, button) {
+  button.disabled = true;
+  const results = await Promise.all(ids.map(id => API.confirmItem(id)));
+  const failed = results.filter(result => result?.success === false).length;
+  showToast(failed ? `已确认 ${ids.length - failed} 个，${failed} 个失败` : `已确认全部 ${ids.length} 个季度`, failed ? 'warning' : 'success');
+  await renderDashboard();
 }
 
 async function handleConfirm(id) {
