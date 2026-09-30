@@ -30,6 +30,7 @@ env/
 regression_downloads/
 regression_target/
 regression_anime/
+/unriad.output
 
 # ── Playwright artifacts ─────────────────────────────────
 playwright-data/*
@@ -60,8 +61,6 @@ desktop.ini
 docker-compose.override.yml
 
 # ── Misc dev artifacts ───────────────────────────────────
-# unriad.output is your personal NAS tree snapshot, not needed in repo
-
 parse_tree.py
 # Config with secrets
 config/series_config.yaml
